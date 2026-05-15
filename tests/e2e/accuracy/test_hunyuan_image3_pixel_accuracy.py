@@ -1,0 +1,84 @@
+from __future__ import annotations
+
+import base64
+import io
+import os
+from pathlib import Path
+
+import pytest
+import requests
+from PIL import Image
+
+from tests.e2e.accuracy.helpers import assert_images_pixel_close, model_output_dir
+from tests.helpers.mark import hardware_test
+from tests.helpers.runtime import OmniServer
+
+pytestmark = [pytest.mark.full_model, pytest.mark.diffusion]
+
+MODEL_NAME = "tencent/HunyuanImage-3.0-Instruct"
+SEED = 42
+NUM_INFERENCE_STEPS = 50
+GUIDANCE_SCALE = 0
+HEIGHT = 1024
+WIDTH = 1024
+PROMPT = "A brown and white dog is running on the grass."
+MEAN_THRESHOLD = 0.02
+P99_THRESHOLD = 0.10
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+BASELINE_PATH = _REPO_ROOT / "assets" / "hunyuan" / "hunyuan_baseline.png"
+DEPLOY_CONFIG = _REPO_ROOT / "vllm_omni" / "deploy" / "hunyuan_image3.yaml"
+
+
+def _model_name() -> str:
+    return os.environ.get("HUNYUAN_IMAGE3_MODEL", MODEL_NAME)
+
+
+def _run_vllm_omni_hunyuan_image3(*, model: str, output_path: Path) -> Image.Image:
+    server_args = [
+        "--deploy-config", str(DEPLOY_CONFIG),
+        "--stage-init-timeout", "300",
+        "--init-timeout", "900",
+    ]
+    with OmniServer(model, server_args, use_omni=True) as omni_server:
+        response = requests.post(
+            f"http://{omni_server.host}:{omni_server.port}/v1/images/generations",
+            json={
+                "model": omni_server.model,
+                "prompt": PROMPT,
+                "size": f"{WIDTH}x{HEIGHT}",
+                "n": 1,
+                "response_format": "b64_json",
+                "num_inference_steps": NUM_INFERENCE_STEPS,
+                "guidance_scale": GUIDANCE_SCALE,
+                "seed": SEED,
+            },
+            timeout=600,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        assert len(payload["data"]) == 1
+        image_bytes = base64.b64decode(payload["data"][0]["b64_json"])
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        image.load()
+        image.save(output_path)
+        return image
+
+
+@hardware_test(res={"cuda": "H100"}, num_cards=4)
+def test_hunyuan_image3_pixel_accuracy(accuracy_artifact_root: Path) -> None:
+    model = _model_name()
+    output_dir = model_output_dir(accuracy_artifact_root, MODEL_NAME)
+
+    vllm_output = _run_vllm_omni_hunyuan_image3(model=model, output_path=output_dir / "vllm_omni.png")
+
+    assert BASELINE_PATH.exists(), f"Baseline image not found at {BASELINE_PATH}"
+    baseline_image = Image.open(BASELINE_PATH).convert("RGB")
+
+    assert_images_pixel_close(
+        model_name=MODEL_NAME,
+        vllm_image=vllm_output,
+        diffusers_image=baseline_image,
+        mean_threshold=MEAN_THRESHOLD,
+        p99_threshold=P99_THRESHOLD,
+    )
