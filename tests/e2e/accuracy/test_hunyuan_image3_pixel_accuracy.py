@@ -27,7 +27,11 @@ P99_THRESHOLD = 0.10
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 BASELINE_PATH = _REPO_ROOT / "assets" / "hunyuan" / "hunyuan_baseline.png"
-DEPLOY_CONFIG = _REPO_ROOT / "vllm_omni" / "deploy" / "hunyuan_image3.yaml"
+_DEFAULT_DEPLOY_CONFIG = _REPO_ROOT / "vllm_omni" / "deploy" / "hunyuan_image3.yaml"
+
+
+def _deploy_config() -> str:
+    return os.environ.get("HUNYUAN_IMAGE3_DEPLOY_CONFIG", str(_DEFAULT_DEPLOY_CONFIG))
 
 
 def _model_name() -> str:
@@ -36,7 +40,7 @@ def _model_name() -> str:
 
 def _run_vllm_omni_hunyuan_image3(*, model: str, output_path: Path) -> Image.Image:
     server_args = [
-        "--deploy-config", str(DEPLOY_CONFIG),
+        "--deploy-config", _deploy_config(),
         "--stage-init-timeout", "300",
         "--init-timeout", "900",
     ]
