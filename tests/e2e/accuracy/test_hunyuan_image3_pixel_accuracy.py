@@ -30,17 +30,20 @@ BASELINE_PATH = _REPO_ROOT / "assets" / "hunyuan" / "hunyuan_baseline.png"
 _DEFAULT_DEPLOY_CONFIG = _REPO_ROOT / "vllm_omni" / "deploy" / "hunyuan_image3.yaml"
 
 
-def _deploy_config() -> str:
-    return os.environ.get("HUNYUAN_IMAGE3_DEPLOY_CONFIG", str(_DEFAULT_DEPLOY_CONFIG))
-
-
 def _model_name() -> str:
     return os.environ.get("HUNYUAN_IMAGE3_MODEL", MODEL_NAME)
 
 
-def _run_vllm_omni_hunyuan_image3(*, model: str, output_path: Path) -> Image.Image:
+def _deploy_config_path() -> str:
+    return os.environ.get("HUNYUAN_IMAGE3_DEPLOY_CONFIG", str(_DEFAULT_DEPLOY_CONFIG))
+
+
+def _run_vllm_omni_hunyuan_image3(
+    *, model: str, deploy_config: str | None = None, output_path: Path
+) -> Image.Image:
+    deploy_config = deploy_config or _deploy_config_path()
     server_args = [
-        "--deploy-config", _deploy_config(),
+        "--deploy-config", deploy_config,
         "--stage-init-timeout", "300",
         "--init-timeout", "900",
     ]
