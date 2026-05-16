@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import io
 import os
+import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -28,6 +30,7 @@ P99_THRESHOLD = 0.10
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 BASELINE_PATH = _REPO_ROOT / "assets" / "hunyuan" / "hunyuan_baseline.png"
 _DEFAULT_DEPLOY_CONFIG = _REPO_ROOT / "vllm_omni" / "deploy" / "hunyuan_image3.yaml"
+_OFFLINE_SCRIPT = _REPO_ROOT / "examples" / "offline_inference" / "hunyuan_image3" / "end2end.py"
 
 
 def _model_name() -> str:
@@ -38,7 +41,7 @@ def _deploy_config_path() -> str:
     return os.environ.get("HUNYUAN_IMAGE3_DEPLOY_CONFIG", str(_DEFAULT_DEPLOY_CONFIG))
 
 
-def _run_vllm_omni_hunyuan_image3(
+def _run_vllm_omni_hunyuan_image3_online(
     *, model: str, deploy_config: str | None = None, output_path: Path
 ) -> Image.Image:
     deploy_config = deploy_config or _deploy_config_path()
@@ -72,32 +75,58 @@ def _run_vllm_omni_hunyuan_image3(
         return image
 
 
+def _run_vllm_omni_hunyuan_image3_offline(
+    *, model: str, deploy_config: str | None = None, output_path: Path
+) -> Image.Image:
+    deploy_config = deploy_config or _deploy_config_path()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        subprocess.run(
+            [
+                "python", str(_OFFLINE_SCRIPT),
+                "--model", model,
+                "--modality", "text2img",
+                "--deploy-config", deploy_config,
+                "--prompts", PROMPT,
+                "--output", tmpdir,
+                "--steps", str(NUM_INFERENCE_STEPS),
+                "--guidance-scale", str(GUIDANCE_SCALE),
+                "--seed", str(SEED),
+            ],
+            check=True,
+        )
+        images = sorted(Path(tmpdir).glob("output_*.png"))
+        assert images, f"No output image found in {tmpdir}"
+        image = Image.open(images[0]).convert("RGB")
+        image.load()
+        image.save(output_path)
+        return image
+
+
 @hardware_test(res={"cuda": "H100"}, num_cards=4)
 def test_hunyuan_image3_pixel_accuracy(accuracy_artifact_root: Path) -> None:
     model = _model_name()
     output_dir = model_output_dir(accuracy_artifact_root, MODEL_NAME)
 
-    # Determinism check: same params, two independent runs → must be pixel-close.
-    output1 = _run_vllm_omni_hunyuan_image3(model=model, output_path=output_dir / "output1.png")
-    output2 = _run_vllm_omni_hunyuan_image3(model=model, output_path=output_dir / "output2.png")
+    online_output = _run_vllm_omni_hunyuan_image3_online(model=model, output_path=output_dir / "vllm_omni_online.png")
+    offline_output = _run_vllm_omni_hunyuan_image3_offline(model=model, output_path=output_dir / "vllm_omni_offline.png")
 
+    # online vs offline: same seed / params, different serving paths → must be pixel-close.
     assert_images_pixel_close(
-        model_name=f"{MODEL_NAME} (output1 vs output2)",
-        vllm_image=output1,
-        diffusers_image=output2,
+        model_name=f"{MODEL_NAME} (online vs offline)",
+        vllm_image=online_output,
+        diffusers_image=offline_output,
         mean_threshold=MEAN_THRESHOLD,
         p99_threshold=P99_THRESHOLD,
     )
 
-    # Baseline regression check: requires huyuan_baseline.png generated from the
-    # same vllm-omni serving path and seed; if baseline is from a different source
-    # (e.g. official HF pipeline / diffusers), this will fail.
+    # Baseline regression check: requires hunyuan_baseline.png generated from the
+    # same vllm-omni serving path and seed.
     assert BASELINE_PATH.exists(), f"Baseline image not found at {BASELINE_PATH}"
     baseline_image = Image.open(BASELINE_PATH).convert("RGB")
 
     assert_images_pixel_close(
-        model_name=f"{MODEL_NAME} (output1 vs baseline)",
-        vllm_image=output1,
+        model_name=f"{MODEL_NAME} (offline vs baseline)",
+        vllm_image=offline_output,
         diffusers_image=baseline_image,
         mean_threshold=MEAN_THRESHOLD,
         p99_threshold=P99_THRESHOLD,
