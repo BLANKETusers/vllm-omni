@@ -3,8 +3,6 @@ from __future__ import annotations
 import base64
 import io
 import os
-import subprocess
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -20,7 +18,7 @@ pytestmark = [pytest.mark.full_model, pytest.mark.diffusion]
 MODEL_NAME = "tencent/HunyuanImage-3.0-Instruct"
 SEED = 42
 NUM_INFERENCE_STEPS = 50
-GUIDANCE_SCALE = 0
+GUIDANCE_SCALE = 2.5
 HEIGHT = 1024
 WIDTH = 1024
 PROMPT = "A brown and white dog is running on the grass."
@@ -31,7 +29,6 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 BASELINE_PATH = _REPO_ROOT / "assets" / "hunyuan" / "hunyuan_baseline.png"
 _DEFAULT_DEPLOY_CONFIG = _REPO_ROOT / "vllm_omni" / "deploy" / "hunyuan_image3.yaml"
 _OFFLINE_SCRIPT = _REPO_ROOT / "examples" / "offline_inference" / "hunyuan_image3" / "end2end.py"
-
 
 def _model_name() -> str:
     return os.environ.get("HUNYUAN_IMAGE3_MODEL", MODEL_NAME)
@@ -78,28 +75,29 @@ def _run_vllm_omni_hunyuan_image3_online(
 def _run_vllm_omni_hunyuan_image3_offline(
     *, model: str, deploy_config: str | None = None, output_path: Path
 ) -> Image.Image:
+    import subprocess
+
     deploy_config = deploy_config or _deploy_config_path()
-    with tempfile.TemporaryDirectory() as tmpdir:
-        subprocess.run(
-            [
-                "python", str(_OFFLINE_SCRIPT),
-                "--model", model,
-                "--modality", "text2img",
-                "--deploy-config", deploy_config,
-                "--prompts", PROMPT,
-                "--output", tmpdir,
-                "--steps", str(NUM_INFERENCE_STEPS),
-                "--guidance-scale", str(GUIDANCE_SCALE),
-                "--seed", str(SEED),
-            ],
-            check=True,
-        )
-        images = sorted(Path(tmpdir).glob("output_*.png"))
-        assert images, f"No output image found in {tmpdir}"
-        image = Image.open(images[0]).convert("RGB")
-        image.load()
-        image.save(output_path)
-        return image
+    output_dir = str(output_path.parent)
+    subprocess.run(
+        [
+            "python", str(_OFFLINE_SCRIPT),
+            "--model", model,
+            "--modality", "text2img",
+            "--deploy-config", deploy_config,
+            "--prompts", PROMPT,
+            "--output", output_dir,
+            "--guidance-scale", str(GUIDANCE_SCALE),
+            "--seed", str(SEED),
+        ],
+        check=True,
+    )
+    images = sorted(Path(output_dir).glob("output_*.png"))
+    assert images, f"No output image found in {output_dir}"
+    image = Image.open(images[0]).convert("RGB")
+    image.load()
+    image.save(output_path)
+    return image
 
 
 @hardware_test(res={"cuda": "H100"}, num_cards=4)
@@ -127,6 +125,15 @@ def test_hunyuan_image3_pixel_accuracy(accuracy_artifact_root: Path) -> None:
     assert_images_pixel_close(
         model_name=f"{MODEL_NAME} (offline vs baseline)",
         vllm_image=offline_output,
+        diffusers_image=baseline_image,
+        mean_threshold=MEAN_THRESHOLD,
+        p99_threshold=P99_THRESHOLD,
+    )
+
+    # online vs baseline_image
+    assert_images_pixel_close(
+        model_name=f"{MODEL_NAME} (online vs baseline)",
+        vllm_image=online_output,
         diffusers_image=baseline_image,
         mean_threshold=MEAN_THRESHOLD,
         p99_threshold=P99_THRESHOLD,
