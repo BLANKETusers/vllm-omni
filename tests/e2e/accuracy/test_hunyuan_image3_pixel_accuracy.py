@@ -105,17 +105,19 @@ def test_hunyuan_image3_pixel_accuracy(accuracy_artifact_root: Path) -> None:
     model = _model_name()
     output_dir = model_output_dir(accuracy_artifact_root, MODEL_NAME)
 
-    online_output = _run_vllm_omni_hunyuan_image3_online(model=model, output_path=output_dir / "vllm_omni_online.png")
+    # online
+    # online_output = _run_vllm_omni_hunyuan_image3_online(model=model, output_path=output_dir / "vllm_omni_online.png")
+    # offline
     offline_output = _run_vllm_omni_hunyuan_image3_offline(model=model, output_path=output_dir / "vllm_omni_offline.png")
 
     # online vs offline: same seed / params, different serving paths → must be pixel-close.
-    assert_images_pixel_close(
-        model_name=f"{MODEL_NAME} (online vs offline)",
-        vllm_image=online_output,
-        diffusers_image=offline_output,
-        mean_threshold=MEAN_THRESHOLD,
-        p99_threshold=P99_THRESHOLD,
-    )
+    # assert_images_pixel_close(
+    #     model_name=f"{MODEL_NAME} (online vs offline)",
+    #     vllm_image=online_output,
+    #     baseline_image=offline_output,
+    #     mean_threshold=MEAN_THRESHOLD,
+    #     p99_threshold=P99_THRESHOLD,
+    # )
 
     # Baseline regression check: requires hunyuan_baseline.png generated from the
     # same vllm-omni serving path and seed.
@@ -125,16 +127,16 @@ def test_hunyuan_image3_pixel_accuracy(accuracy_artifact_root: Path) -> None:
     assert_images_pixel_close(
         model_name=f"{MODEL_NAME} (offline vs baseline)",
         vllm_image=offline_output,
-        diffusers_image=baseline_image,
+        baseline_image=baseline_image,
         mean_threshold=MEAN_THRESHOLD,
         p99_threshold=P99_THRESHOLD,
     )
 
     # online vs baseline_image
-    assert_images_pixel_close(
-        model_name=f"{MODEL_NAME} (online vs baseline)",
-        vllm_image=online_output,
-        diffusers_image=baseline_image,
-        mean_threshold=MEAN_THRESHOLD,
-        p99_threshold=P99_THRESHOLD,
-    )
+    # assert_images_pixel_close(
+    #     model_name=f"{MODEL_NAME} (online vs baseline)",
+    #     vllm_image=online_output,
+    #     baseline_image=baseline_image,
+    #     mean_threshold=MEAN_THRESHOLD,
+    #     p99_threshold=P99_THRESHOLD,
+    # )

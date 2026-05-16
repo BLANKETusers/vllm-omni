@@ -65,7 +65,7 @@ def assert_similarity(
     *,
     model_name: str,
     vllm_image: Image.Image,
-    diffusers_image: Image.Image,
+    baseline_image: Image.Image,
     ssim_threshold: float,
     psnr_threshold: float,
     width: int | None = None,
@@ -73,19 +73,19 @@ def assert_similarity(
     compare_mode: str = "RGB",
 ) -> None:
     requested_size = (width, height) if width is not None and height is not None else None
-    if requested_size is not None and diffusers_image.size != requested_size:
+    if requested_size is not None and baseline_image.size != requested_size:
         pytest.skip(
             "Skipping as diffusers baseline output is corrupt and not comparable: "
-            f"dimensions do not match requested size; requested={requested_size}, got={diffusers_image.size}."
+            f"dimensions do not match requested size; requested={requested_size}, got={baseline_image.size}."
         )
 
-    assert vllm_image.size == diffusers_image.size, (
-        f"Online and diffusers output sizes mismatch: online={vllm_image.size}, diffusers={diffusers_image.size}"
+    assert vllm_image.size == baseline_image.size, (
+        f"Online and diffusers output sizes mismatch: online={vllm_image.size}, diffusers={baseline_image.size}"
     )
 
     ssim_score, psnr_score = compute_image_ssim_psnr(
         prediction=vllm_image,
-        reference=diffusers_image,
+        reference=baseline_image,
         compare_mode=compare_mode,
     )
     print(f"{model_name} similarity metrics:")
@@ -106,19 +106,19 @@ def assert_image_sequence_similarity(
     *,
     model_name: str,
     vllm_images: list[Image.Image],
-    diffusers_images: list[Image.Image],
+    baseline_images: list[Image.Image],
     ssim_threshold: float,
     psnr_threshold: float,
     compare_mode: str = "RGB",
 ) -> None:
-    assert len(vllm_images) == len(diffusers_images), (
-        f"Output image count mismatch for {model_name}: online={len(vllm_images)}, diffusers={len(diffusers_images)}"
+    assert len(vllm_images) == len(baseline_images), (
+        f"Output image count mismatch for {model_name}: online={len(vllm_images)}, diffusers={len(baseline_images)}"
     )
-    for index, (vllm_image, diffusers_image) in enumerate(zip(vllm_images, diffusers_images, strict=True), start=1):
+    for index, (vllm_image, baseline_image) in enumerate(zip(vllm_images, baseline_images, strict=True), start=1):
         assert_similarity(
             model_name=f"{model_name}[layer={index}]",
             vllm_image=vllm_image,
-            diffusers_image=diffusers_image,
+            baseline_image=baseline_image,
             ssim_threshold=ssim_threshold,
             psnr_threshold=psnr_threshold,
             compare_mode=compare_mode,
@@ -186,7 +186,7 @@ def assert_images_pixel_close(
     *,
     model_name: str,
     vllm_image: Image.Image,
-    diffusers_image: Image.Image,
+    baseline_image: Image.Image,
     compare_mode: str = "RGB",
     mean_threshold: float,
     p99_threshold: float,
@@ -206,12 +206,12 @@ def assert_images_pixel_close(
     pixels where any channel exceeds a tolerance, while ``channel_ratio`` counts
     individual channel samples above that tolerance.
     """
-    assert vllm_image.size == diffusers_image.size, (
-        f"Online and diffusers output sizes mismatch: online={vllm_image.size}, diffusers={diffusers_image.size}"
+    assert vllm_image.size == baseline_image.size, (
+        f"Online and diffusers output sizes mismatch: online={vllm_image.size}, diffusers={baseline_image.size}"
     )
 
     vllm_array = np.asarray(vllm_image.convert(compare_mode), dtype=np.float32) / 255.0
-    diffusers_array = np.asarray(diffusers_image.convert(compare_mode), dtype=np.float32) / 255.0
+    diffusers_array = np.asarray(baseline_image.convert(compare_mode), dtype=np.float32) / 255.0
     channel_abs_diff = np.abs(vllm_array - diffusers_array)
     mean_abs_diff = float(channel_abs_diff.mean())
     p99_abs_diff = float(np.quantile(channel_abs_diff, 0.99))
