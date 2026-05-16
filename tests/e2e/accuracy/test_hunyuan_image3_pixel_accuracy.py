@@ -26,7 +26,7 @@ MEAN_THRESHOLD = 0.02
 P99_THRESHOLD = 0.10
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-BASELINE_PATH = _REPO_ROOT / "assets" / "hunyuan" / "hunyuan_baseline.png"
+BASELINE_PATH = _REPO_ROOT / "tests" / "assets" / "hunyuan" / "hunyuan_baseline.png"
 _DEFAULT_DEPLOY_CONFIG = _REPO_ROOT / "vllm_omni" / "deploy" / "hunyuan_image3.yaml"
 _OFFLINE_SCRIPT = _REPO_ROOT / "examples" / "offline_inference" / "hunyuan_image3" / "end2end.py"
 
