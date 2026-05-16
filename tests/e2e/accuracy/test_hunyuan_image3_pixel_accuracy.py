@@ -77,14 +77,27 @@ def test_hunyuan_image3_pixel_accuracy(accuracy_artifact_root: Path) -> None:
     model = _model_name()
     output_dir = model_output_dir(accuracy_artifact_root, MODEL_NAME)
 
-    vllm_output = _run_vllm_omni_hunyuan_image3(model=model, output_path=output_dir / "vllm_omni.png")
+    # Determinism check: same params, two independent runs → must be pixel-close.
+    output1 = _run_vllm_omni_hunyuan_image3(model=model, output_path=output_dir / "output1.png")
+    output2 = _run_vllm_omni_hunyuan_image3(model=model, output_path=output_dir / "output2.png")
 
+    assert_images_pixel_close(
+        model_name=f"{MODEL_NAME} (output1 vs output2)",
+        vllm_image=output1,
+        diffusers_image=output2,
+        mean_threshold=MEAN_THRESHOLD,
+        p99_threshold=P99_THRESHOLD,
+    )
+
+    # Baseline regression check: requires huyuan_baseline.png generated from the
+    # same vllm-omni serving path and seed; if baseline is from a different source
+    # (e.g. official HF pipeline / diffusers), this will fail.
     assert BASELINE_PATH.exists(), f"Baseline image not found at {BASELINE_PATH}"
     baseline_image = Image.open(BASELINE_PATH).convert("RGB")
 
     assert_images_pixel_close(
-        model_name=MODEL_NAME,
-        vllm_image=vllm_output,
+        model_name=f"{MODEL_NAME} (output1 vs baseline)",
+        vllm_image=output1,
         diffusers_image=baseline_image,
         mean_threshold=MEAN_THRESHOLD,
         p99_threshold=P99_THRESHOLD,
