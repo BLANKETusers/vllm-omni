@@ -114,7 +114,7 @@ def test_hunyuan_image3_pixel_accuracy(accuracy_artifact_root: Path) -> None:
     # assert_images_pixel_close(
     #     model_name=f"{MODEL_NAME} (online vs offline)",
     #     vllm_image=online_output,
-    #     baseline_image=offline_output,
+    #     diffusers_image=offline_output,
     #     mean_threshold=MEAN_THRESHOLD,
     #     p99_threshold=P99_THRESHOLD,
     # )
@@ -127,7 +127,7 @@ def test_hunyuan_image3_pixel_accuracy(accuracy_artifact_root: Path) -> None:
     assert_images_pixel_close(
         model_name=f"{MODEL_NAME} (offline vs baseline)",
         vllm_image=offline_output,
-        baseline_image=baseline_image,
+        diffusers_image=baseline_image,
         mean_threshold=MEAN_THRESHOLD,
         p99_threshold=P99_THRESHOLD,
     )
@@ -136,7 +136,7 @@ def test_hunyuan_image3_pixel_accuracy(accuracy_artifact_root: Path) -> None:
     # assert_images_pixel_close(
     #     model_name=f"{MODEL_NAME} (online vs baseline)",
     #     vllm_image=online_output,
-    #     baseline_image=baseline_image,
+    #     diffusers_image=baseline_image,
     #     mean_threshold=MEAN_THRESHOLD,
     #     p99_threshold=P99_THRESHOLD,
     # )
