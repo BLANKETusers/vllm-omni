@@ -30,6 +30,7 @@ BASELINE_PATH = _REPO_ROOT / "tests" / "assets" / "hunyuan" / "hunyuan_baseline.
 _DEFAULT_DEPLOY_CONFIG = _REPO_ROOT / "vllm_omni" / "deploy" / "hunyuan_image3.yaml"
 _OFFLINE_SCRIPT = _REPO_ROOT / "examples" / "offline_inference" / "hunyuan_image3" / "end2end.py"
 
+
 def _model_name() -> str:
     return os.environ.get("HUNYUAN_IMAGE3_MODEL", MODEL_NAME)
 
