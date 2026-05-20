@@ -3,6 +3,7 @@
 
 import inspect
 import logging
+import os
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, cast
@@ -2970,6 +2971,22 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
             latents=latents,
         )
 
+        self._debug_file = None
+        if os.environ.get("DEBUG_COMPARE", ""):
+            self._debug_file = open(os.environ.get("DEBUG_COMPARE", "debug_compare.txt"), "w")
+            lt_fp32 = latents.float()
+            seed_val = generator[0].initial_seed() if isinstance(generator, list) else generator.initial_seed()
+            self._debug_file.write(f"initial_latent_seed {seed_val}\n")
+            self._debug_file.write(f"initial_latent_shape {tuple(latents.shape)}\n")
+            self._debug_file.write(f"initial_latent_sum {lt_fp32.sum().item():.12f}\n")
+            self._debug_file.write(f"initial_latent_std {lt_fp32.std().item():.12f}\n")
+            self._debug_file.write(f"initial_latent_min {lt_fp32.min().item():.12f}\n")
+            self._debug_file.write(f"initial_latent_max {lt_fp32.max().item():.12f}\n")
+            self._debug_file.write(f"timesteps {self.scheduler.timesteps.tolist()}\n")
+            self._debug_file.write(f"num_timesteps {len(self.scheduler.timesteps)}\n")
+            self._debug_file.write(f"flow_shift {self.scheduler.config.shift}\n")
+            self._debug_file.write(f"scheduler_sigmas {self.scheduler.sigmas.tolist()}\n")
+
         # Prepare extra step kwargs.
         _scheduler_step_extra_kwargs = self.prepare_extra_func_kwargs(self.scheduler.step, {"generator": generator})
 
@@ -3080,6 +3097,12 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
                     pred = tc_prev_pred
 
                 # Perform guidance
+                if self._debug_file is not None:
+                    pf32 = pred.float()
+                    self._debug_file.write(f"step_{i}_pred_noise_sum {pf32.sum().item():.12f}\n")
+                    self._debug_file.write(f"step_{i}_pred_noise_std {pf32.std().item():.12f}\n")
+                    self._debug_file.write(f"step_{i}_pred_noise_min {pf32.min().item():.12f}\n")
+                    self._debug_file.write(f"step_{i}_pred_noise_max {pf32.max().item():.12f}\n")
                 if cfg_parallel_ready:
                     # CFG parallel: all_gather → all ranks combine locally (no broadcast needed)
                     gathered = cfg_group.all_gather(pred, separate_tensors=True)
@@ -3089,7 +3112,15 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
                     pred = self.cfg_operator(pred_cond, pred_uncond, self.guidance_scale, step=i)
 
                 # Scheduler step (all ranks compute locally in CFG parallel)
+                if self._debug_file is not None:
+                    pf32 = pred.float()
+                    self._debug_file.write(f"step_{i}_after_cfg_sum {pf32.sum().item():.12f}\n")
+                    self._debug_file.write(f"step_{i}_after_cfg_std {pf32.std().item():.12f}\n")
                 latents = self.scheduler.step(pred, t, latents, **_scheduler_step_extra_kwargs, return_dict=False)[0]
+                if self._debug_file is not None and i == 0:
+                    lf32 = latents.float()
+                    self._debug_file.write(f"step_{i}_after_scheduler_latent_sum {lf32.sum().item():.12f}\n")
+                    self._debug_file.write(f"step_{i}_after_scheduler_latent_std {lf32.std().item():.12f}\n")
                 if i != len(timesteps) - 1 and should_compute:
                     offset = model_kwargs.get("ar_kv_reuse_offset", 0)
                     model_kwargs = self.model._update_model_kwargs_for_generation(  # noqa
@@ -3122,6 +3153,15 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
                     progress_bar.update()
 
         set_forward_context_denoise_step_idx(None)
+
+        if self._debug_file is not None:
+            lf32 = latents.float()
+            self._debug_file.write(f"final_latent_sum {lf32.sum().item():.12f}\n")
+            self._debug_file.write(f"final_latent_std {lf32.std().item():.12f}\n")
+            self._debug_file.write(f"final_latent_min {lf32.min().item():.12f}\n")
+            self._debug_file.write(f"final_latent_max {lf32.max().item():.12f}\n")
+            self._debug_file.close()
+            self._debug_file = None
 
         if hasattr(self.vae.config, "scaling_factor") and self.vae.config.scaling_factor:
             latents = latents / self.vae.config.scaling_factor
