@@ -8,8 +8,8 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn as nn
-from diffusers.schedulers.scheduling_flow_match_euler_discrete import (
-    FlowMatchEulerDiscreteScheduler,
+from vllm_omni.diffusion.models.schedulers.scheduling_flow_match_discrete import (
+    FlowMatchDiscreteScheduler,
 )
 from PIL import Image as PILImage
 from transformers.generation.configuration_utils import GenerationConfig
@@ -431,14 +431,11 @@ class HunyuanImage3Pipeline(
     def pipeline(self):
         if self._pipeline is None:
             # shift hard code
-            self.scheduler = FlowMatchEulerDiscreteScheduler(
+            self.scheduler = FlowMatchDiscreteScheduler(
                 num_train_timesteps=1000,
                 shift=self.generation_config.flow_shift,
-                use_dynamic_shifting=False,
-                base_shift=0.5,
-                max_shift=1.15,
-                time_shift_type="exponential",
-                stochastic_sampling=False,
+                reverse=True,
+                solver="euler",
             )
             self._pipeline = HunyuanImage3Text2ImagePipeline(model=self, scheduler=self.scheduler, vae=self.vae)
         return self._pipeline
@@ -1119,11 +1116,7 @@ class HunyuanImage3Pipeline(
                 raise ValueError("`batch_gen_image_info` should be provided when `mode` is `gen_image`.")
 
             image_info: ImageInfo = batch_gen_image_info[0]
-            num_image_tokens = (
-                image_info.image_token_length
-                + (1 if image_info.add_timestep_token else 0)
-                + (1 if image_info.add_guidance_token else 0)
-            )
+            num_image_tokens = image_info.image_token_length
             kwargs["num_image_tokens"] = num_image_tokens
             # 50 and 5.0 hard code
             results = self.pipeline(
