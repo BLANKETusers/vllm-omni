@@ -1116,7 +1116,11 @@ class HunyuanImage3Pipeline(
                 raise ValueError("`batch_gen_image_info` should be provided when `mode` is `gen_image`.")
 
             image_info: ImageInfo = batch_gen_image_info[0]
-            num_image_tokens = image_info.image_token_length
+            num_image_tokens = (
+                image_info.image_token_length
+                + (1 if image_info.add_timestep_token else 0)
+                + (1 if image_info.add_guidance_token else 0)
+            )
             kwargs["num_image_tokens"] = num_image_tokens
             # 50 and 5.0 hard code
             results = self.pipeline(
