@@ -2986,6 +2986,8 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
             self._debug_file.write(f"num_timesteps {len(self.scheduler.timesteps)}\n")
             self._debug_file.write(f"flow_shift {self.scheduler.config.shift}\n")
             self._debug_file.write(f"scheduler_sigmas {self.scheduler.sigmas.tolist()}\n")
+            self._debug_file.write(f"guidance_scale {self._guidance_scale}\n")
+            self._debug_file.write(f"num_inference_steps {num_inference_steps}\n")
 
         # Prepare extra step kwargs.
         _scheduler_step_extra_kwargs = self.prepare_extra_func_kwargs(self.scheduler.step, {"generator": generator})
