@@ -1409,6 +1409,10 @@ class HunyuanImage3Pipeline(
                 batch_cond_image_info = None
 
         generator = req.sampling_params.generator or generator
+        # Create generator from seed if not already provided, so that the
+        # same seed produces identical initial latents as the baseline.
+        if generator is None and req.sampling_params.seed is not None:
+            generator = [torch.Generator(self.device).manual_seed(req.sampling_params.seed + i) for i in range(len(req.prompts))]
         height = req.sampling_params.height or height
         width = req.sampling_params.width or width
         num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps
