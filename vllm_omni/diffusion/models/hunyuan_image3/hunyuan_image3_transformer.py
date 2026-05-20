@@ -3002,6 +3002,24 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
             model_kwargs=model_kwargs,
         )
 
+        if self._debug_file is not None:
+            tkw = self.model._tkwrapper
+            bsz = input_ids.shape[0]
+            for b in range(bsz):
+                ids = input_ids[b].tolist()
+                decoded = tkw.tokenizer.decode(ids, skip_special_tokens=False)
+                self._debug_file.write(f"input_ids_{b}_shape ({len(ids)},)\n")
+                self._debug_file.write(f"input_ids_{b}_decoded {decoded}\n")
+            am = attention_mask
+            self._debug_file.write(f"attention_mask_shape {tuple(am.shape)}\n")
+            im = model_kwargs.get("image_mask")
+            if im is not None:
+                self._debug_file.write(f"image_mask_shape {tuple(im.shape)}\n")
+                self._debug_file.write(f"image_mask_true_count {im.sum().item()}\n")
+            gtsi = model_kwargs.get("gen_timestep_scatter_index")
+            if gtsi is not None:
+                self._debug_file.write(f"gen_timestep_scatter_index {gtsi.tolist()}\n")
+
         # Split inputs for CFG parallel: each rank processes only its branch.
         if cfg_parallel_ready:
             cfg_group = get_cfg_group()
