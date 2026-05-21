@@ -1546,8 +1546,8 @@ async def generate_images(request: ImageGenerationRequest, raw_request: Request)
                     status_code=generation_result.error.code if generation_result.error else 400,
                     content=generation_result.model_dump(),
                 )
-            flat_images, _, _ = generation_result
-            image_data = [ImageData(b64_json=encode_image_base64(img), revised_prompt=None) for img in flat_images]
+            flat_images, ar_text, _, _ = generation_result
+            image_data = [ImageData(b64_json=encode_image_base64(img), revised_prompt=ar_text if i == 0 else None) for i, img in enumerate(flat_images)]
             return ImageGenerationResponse(created=int(time.time()), data=image_data)
 
         # Build params - pass through user values directly
@@ -1937,9 +1937,10 @@ async def edit_images(
                     status_code=generation_result.error.code if generation_result.error else 400,
                     detail=generation_result.message,
                 )
-            images, _, _ = generation_result
+            images, ar_text_edit, _, _ = generation_result
         else:
             # Single-stage diffusion: use the direct path.
+            ar_text_edit = ""
             result = await _generate_with_async_omni(
                 engine_client=engine_client,
                 gen_params=gen_params,
@@ -1957,9 +1958,9 @@ async def edit_images(
                 b64_json=_encode_image_base64_with_compression(
                     img, format=output_format, output_compression=output_compression
                 ),
-                revised_prompt=None,
+                revised_prompt=ar_text_edit if i == 0 else None,
             )
-            for img in images
+            for i, img in enumerate(images)
         ]
 
         return ImageGenerationResponse(

@@ -2543,6 +2543,13 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
         stage_durations = result.stage_durations
         peak_memory_mb = result.peak_memory_mb
 
+        # Collect AR stage CoT text (non-streaming)
+        ar_text = ""
+        if getattr(result.request_output, "outputs", None):
+            ar_text = "".join(getattr(o, "text", "") or "" for o in result.request_output.outputs)
+        if not ar_text:
+            ar_text = (result.custom_output or {}).get("ar_generated_text", "") or ""
+
         flat_images: list[Image.Image] = []
         for item in images:
             if isinstance(item, list):
@@ -2550,7 +2557,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
             else:
                 flat_images.append(item)
 
-        return flat_images, stage_durations, peak_memory_mb
+        return flat_images, ar_text, stage_durations, peak_memory_mb
 
     async def _create_diffusion_chat_completion(
         self,
