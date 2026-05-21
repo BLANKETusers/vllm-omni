@@ -855,12 +855,12 @@ class HunYuanRotary2DEmbedder:
         q = q.reshape(bs, q_len, self.num_heads, self.head_dim)
         k = k.reshape(bs, q_len, self.num_kv_heads, self.head_dim)
 
-        q = self.rope(q.to(torch.float32), cos, sin)
-        k = self.rope(k.to(torch.float32), cos, sin)
+        q = self.rope(q, cos, sin)
+        k = self.rope(k, cos, sin)
 
-        # 5. Restore original shape + convert to bfloat16
-        q = q.reshape(hidden_states.shape[0], self.num_heads * self.head_dim).to(torch.bfloat16)
-        k = k.reshape(hidden_states.shape[0], self.num_kv_heads * self.head_dim).to(torch.bfloat16)
+        # 5. Restore original shape
+        q = q.reshape(hidden_states.shape[0], self.num_heads * self.head_dim)
+        k = k.reshape(hidden_states.shape[0], self.num_kv_heads * self.head_dim)
         hidden_states = hidden_states.reshape(hidden_states_shape)
         return q, k
 
