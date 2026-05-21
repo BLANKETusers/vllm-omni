@@ -333,7 +333,7 @@ def _run_online(stage_configs_path: str, output_path: Path) -> tuple[Image.Image
                 "seed": SEED,
                 "sys_type": "en_unified",
                 "bot_task": "think_recaption",
-                "size": "720x1280",
+                "size": "1280x720",
             },
             files=[("image", (f"image_{i}.png", pil_to_png_bytes(img), "image/png")) for i, img in enumerate(images)],
             timeout=600,
