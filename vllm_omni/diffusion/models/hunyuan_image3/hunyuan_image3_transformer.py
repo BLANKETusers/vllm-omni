@@ -855,16 +855,12 @@ class HunYuanRotary2DEmbedder:
         q = q.reshape(bs, q_len, self.num_heads, self.head_dim)
         k = k.reshape(bs, q_len, self.num_kv_heads, self.head_dim)
 
-        # Cos/sin are computed in float32; cast to match input dtype
-        # to avoid a float32 round-trip that diverges from the baseline.
-        cos = cos.to(q.dtype)
-        sin = sin.to(q.dtype)
-        q = self.rope(q, cos, sin)
-        k = self.rope(k, cos, sin)
+        q = self.rope(q.to(torch.float32), cos, sin)
+        k = self.rope(k.to(torch.float32), cos, sin)
 
-        # 5. Restore original shape
-        q = q.reshape(hidden_states.shape[0], self.num_heads * self.head_dim)
-        k = k.reshape(hidden_states.shape[0], self.num_kv_heads * self.head_dim)
+        # 5. Restore original shape + convert to bfloat16
+        q = q.reshape(hidden_states.shape[0], self.num_heads * self.head_dim).to(torch.bfloat16)
+        k = k.reshape(hidden_states.shape[0], self.num_kv_heads * self.head_dim).to(torch.bfloat16)
         hidden_states = hidden_states.reshape(hidden_states_shape)
         return q, k
 
