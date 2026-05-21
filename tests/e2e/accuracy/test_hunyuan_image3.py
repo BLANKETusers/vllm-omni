@@ -331,12 +331,15 @@ def _run_online(stage_configs_path: str, output_path: Path) -> tuple[Image.Image
                 "num_inference_steps": NUM_INFERENCE_STEPS,
                 "guidance_scale": GUIDANCE_SCALE,
                 "seed": SEED,
-                "use_system_prompt": "en_unified",
+                "sys_type": "en_unified",
+                "bot_task": "think_recaption",
             },
             files=[("image", (f"image_{i}.png", pil_to_png_bytes(img), "image/png")) for i, img in enumerate(images)],
             timeout=600,
         )
         elapsed = time.perf_counter() - t0
+        if not response.ok:
+            print(f"[ONLINE] HTTP {response.status_code} response body: {response.text}")
         response.raise_for_status()
         payload = response.json()
         assert len(payload["data"]) == 1
