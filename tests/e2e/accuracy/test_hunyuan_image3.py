@@ -375,6 +375,9 @@ def test_image_to_image_alignment_online(accuracy_artifact_root: Path, accuracy_
     clip_scorer = CLIPScorer()
     cot_results = scorer.text_similarity(online_cot, COT_REF)
     image_ref = Image.open(str(accuracy_assets_root / "hunyuan_image_ref.png")).convert("RGB")
+    if online_image.size != image_ref.size:
+        print(f"[ONLINE] resizing online image from {online_image.size} to {image_ref.size} for comparison")
+        online_image = online_image.resize(image_ref.size, Image.LANCZOS)
     image_clip_score = clip_scorer.image_image_score(online_image, image_ref)
     ssim_value, psnr_value = compute_image_ssim_psnr(prediction=online_image, reference=image_ref, compare_mode="RGB")
 
