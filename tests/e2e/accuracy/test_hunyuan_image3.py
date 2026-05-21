@@ -372,6 +372,7 @@ def test_image_to_image_alignment_online(accuracy_artifact_root: Path, accuracy_
         _make_config(True, tmp / "online.yaml")
         online_image, online_cot, _ = _run_online(str(tmp / "online.yaml"), output_dir)
 
+    online_cot = online_cot.lstrip("\n")
     scorer = SemanticSimilarityScorer()
     clip_scorer = CLIPScorer()
     cot_results = scorer.text_similarity(online_cot, COT_REF)
