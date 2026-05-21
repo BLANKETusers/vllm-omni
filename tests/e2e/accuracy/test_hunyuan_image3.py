@@ -314,9 +314,12 @@ def _run_online(stage_configs_path: str, output_path: Path) -> tuple[Image.Image
     from benchmarks.accuracy.common import decode_base64_image, pil_to_png_bytes
 
     server_args = [
-        "--stage-configs-path", stage_configs_path,
-        "--stage-init-timeout", "300",
-        "--init-timeout", "900",
+        "--stage-configs-path",
+        stage_configs_path,
+        "--stage-init-timeout",
+        "300",
+        "--init-timeout",
+        "900",
     ]
     with OmniServer(MODEL_PATH, server_args, use_omni=True) as omni_server:
         images = download_images(TEST_IMAGE_URLS)
@@ -398,9 +401,7 @@ def test_image_to_image_alignment_online(accuracy_artifact_root: Path, accuracy_
     assert image_clip_score >= THRESHOLDS["clip_score"], (
         f"[ONLINE] Image-Image similarity {image_clip_score:.4f} below threshold {THRESHOLDS['clip_score']}"
     )
-    assert ssim_value >= THRESHOLDS["ssim"], (
-        f"[ONLINE] SSIM {ssim_value:.4f} below threshold {THRESHOLDS['ssim']}"
-    )
+    assert ssim_value >= THRESHOLDS["ssim"], f"[ONLINE] SSIM {ssim_value:.4f} below threshold {THRESHOLDS['ssim']}"
     assert psnr_value >= THRESHOLDS["psnr"], (
         f"[ONLINE] PSNR {psnr_value:.2f} dB below threshold {THRESHOLDS['psnr']} dB"
     )

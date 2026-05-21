@@ -1547,7 +1547,10 @@ async def generate_images(request: ImageGenerationRequest, raw_request: Request)
                     content=generation_result.model_dump(),
                 )
             flat_images, ar_text, _, _ = generation_result
-            image_data = [ImageData(b64_json=encode_image_base64(img), revised_prompt=ar_text if i == 0 else None) for i, img in enumerate(flat_images)]
+            image_data = [
+                ImageData(b64_json=encode_image_base64(img), revised_prompt=ar_text if i == 0 else None)
+                for i, img in enumerate(flat_images)
+            ]
             return ImageGenerationResponse(created=int(time.time()), data=image_data)
 
         # Build params - pass through user values directly
