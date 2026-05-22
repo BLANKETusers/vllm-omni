@@ -1535,6 +1535,12 @@ async def generate_images(request: ImageGenerationRequest, raw_request: Request)
                 # Keep /images validation semantics: invalid LoRA should fail with 400.
                 _parse_lora_request(request.lora)
                 extra_body["lora"] = request.lora
+            if request.bot_task is not None:
+                extra_body["bot_task"] = request.bot_task
+            if request.use_system_prompt is not None:
+                extra_body["use_system_prompt"] = request.use_system_prompt
+            if request.system_prompt is not None:
+                extra_body["system_prompt"] = request.system_prompt
 
             generation_result = await chat_handler.generate_diffusion_images(
                 prompt=request.prompt,
@@ -1546,11 +1552,9 @@ async def generate_images(request: ImageGenerationRequest, raw_request: Request)
                     status_code=generation_result.error.code if generation_result.error else 400,
                     content=generation_result.model_dump(),
                 )
-            flat_images, ar_text, _, _ = generation_result
-            image_data = [
-                ImageData(b64_json=encode_image_base64(img), revised_prompt=(ar_text or None) if i == 0 else None)
-                for i, img in enumerate(flat_images)
-            ]
+            flat_images, _, _, _ = generation_result
+            image_data = [ImageData(b64_json=encode_image_base64(img), revised_prompt=None) for img in flat_images]
+
             return ImageGenerationResponse(created=int(time.time()), data=image_data)
 
         # Build params - pass through user values directly
@@ -1563,6 +1567,8 @@ async def generate_images(request: ImageGenerationRequest, raw_request: Request)
             extra_args["use_system_prompt"] = request.use_system_prompt
         if request.system_prompt is not None:
             extra_args["system_prompt"] = request.system_prompt
+        if request.bot_task is not None:
+            extra_args["bot_task"] = request.bot_task
         if extra_args:
             gen_params.extra_args = extra_args
         # Parse per-request LoRA (compatible with chat's extra_body.lora shape).
@@ -1730,6 +1736,7 @@ async def edit_images(
         )
     try:
         # 2. Build prompt & images params
+        cot_output = None
         prompt: OmniTextPrompt = {"prompt": prompt}
         if negative_prompt is not None:
             prompt["negative_prompt"] = negative_prompt
@@ -1940,10 +1947,9 @@ async def edit_images(
                     status_code=generation_result.error.code if generation_result.error else 400,
                     detail=generation_result.message,
                 )
-            images, ar_text_edit, _, _ = generation_result
+            images, _, _, cot_output = generation_result
         else:
             # Single-stage diffusion: use the direct path.
-            ar_text_edit = ""
             result = await _generate_with_async_omni(
                 engine_client=engine_client,
                 gen_params=gen_params,
@@ -1961,9 +1967,9 @@ async def edit_images(
                 b64_json=_encode_image_base64_with_compression(
                     img, format=output_format, output_compression=output_compression
                 ),
-                revised_prompt=(ar_text_edit or None) if i == 0 else None,
+                revised_prompt=None,
             )
-            for i, img in enumerate(images)
+            for img in images
         ]
 
         return ImageGenerationResponse(
@@ -1971,6 +1977,7 @@ async def edit_images(
             data=image_data,
             output_format=output_format,
             size=size_str,
+            cot_output=cot_output,
         )
 
     except (EngineGenerateError, EngineDeadError) as exc:
