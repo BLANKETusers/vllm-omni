@@ -338,7 +338,9 @@ def _run_online(stage_configs_path: str, output_path: Path) -> tuple[Image.Image
                     "bot_task": "think_recaption",
                     "size": "1280x720",
                 },
-                files=[("image", (f"image_{i}.png", pil_to_png_bytes(img), "image/png")) for i, img in enumerate(images)],
+                files=[
+                    ("image", (f"image_{i}.png", pil_to_png_bytes(img), "image/png")) for i, img in enumerate(images)
+                ],
                 timeout=600,
             )
             elapsed = time.perf_counter() - t0
