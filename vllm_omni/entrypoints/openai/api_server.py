@@ -1961,7 +1961,7 @@ async def edit_images(
                 b64_json=_encode_image_base64_with_compression(
                     img, format=output_format, output_compression=output_compression
                 ),
-                revised_prompt=ar_text_edit if i == 0 else None,
+                revised_prompt=(ar_text_edit or None) if i == 0 else None,
             )
             for i, img in enumerate(images)
         ]

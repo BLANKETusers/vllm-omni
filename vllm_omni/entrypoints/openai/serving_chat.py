@@ -2549,6 +2549,8 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
             ar_text = "".join(getattr(o, "text", "") or "" for o in result.request_output.outputs)
         if not ar_text:
             ar_text = (result.custom_output or {}).get("ar_generated_text", "") or ""
+            if isinstance(ar_text, list):
+                ar_text = "\n".join(text for text in ar_text if text)
 
         flat_images: list[Image.Image] = []
         for item in images:
