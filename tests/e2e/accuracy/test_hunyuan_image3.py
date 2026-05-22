@@ -28,7 +28,7 @@ from tests.e2e.accuracy.helpers import (
     model_output_dir,
 )
 from tests.helpers.mark import hardware_test
-from tests.helpers.runtime import OmniServer
+from tests.helpers.runtime import OmniRunner, OmniServer
 from vllm_omni.diffusion.models.hunyuan_image3.prompt_utils import build_prompt_tokens, resolve_stop_token_ids
 
 os.environ["DIFFUSION_ATTENTION_BACKEND"] = "TORCH_SDPA"
@@ -237,7 +237,6 @@ def _make_quant_dit_config(path: Path) -> None:
 def _run_offline(stage_configs_path: str, output_path: Path) -> tuple[Image.Image, str, float]:
     from transformers import AutoTokenizer
 
-    from tests.helpers.runtime import OmniRunner
     from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniPromptType
     from vllm_omni.platforms import current_omni_platform
 
@@ -321,41 +320,43 @@ def _run_online(stage_configs_path: str, output_path: Path) -> tuple[Image.Image
         "--init-timeout",
         "900",
     ]
-    with OmniServer(MODEL_PATH, server_args, use_omni=True) as omni_server:
-        images = download_images(TEST_IMAGE_URLS)
-        t0 = time.perf_counter()
-        response = requests.post(
-            f"http://{omni_server.host}:{omni_server.port}/v1/images/edits",
-            data={
-                "model": omni_server.model,
-                "prompt": PROMPT,
-                "n": 1,
-                "response_format": "b64_json",
-                "num_inference_steps": NUM_INFERENCE_STEPS,
-                "guidance_scale": GUIDANCE_SCALE,
-                "seed": SEED,
-                "sys_type": "en_unified",
-                "bot_task": "think_recaption",
-                "size": "1280x720",
-            },
-            files=[("image", (f"image_{i}.png", pil_to_png_bytes(img), "image/png")) for i, img in enumerate(images)],
-            timeout=600,
-        )
-        elapsed = time.perf_counter() - t0
-        if not response.ok:
-            print(f"[ONLINE] HTTP {response.status_code} response body: {response.text}")
-        response.raise_for_status()
-        payload = response.json()
-        assert len(payload["data"]) == 1
-        image = decode_base64_image(payload["data"][0]["b64_json"])
-        image.load()
-        image.save(output_path / "image_online.png")
-        cot_text = payload["data"][0].get("revised_prompt") or ""
-        (output_path / "cot_online.txt").write_text(cot_text, encoding="utf-8")
+    try:
+        with OmniServer(MODEL_PATH, server_args, use_omni=True) as omni_server:
+            images = download_images(TEST_IMAGE_URLS)
+            t0 = time.perf_counter()
+            response = requests.post(
+                f"http://{omni_server.host}:{omni_server.port}/v1/images/edits",
+                data={
+                    "model": omni_server.model,
+                    "prompt": PROMPT,
+                    "n": 1,
+                    "response_format": "b64_json",
+                    "num_inference_steps": NUM_INFERENCE_STEPS,
+                    "guidance_scale": GUIDANCE_SCALE,
+                    "seed": SEED,
+                    "sys_type": "en_unified",
+                    "bot_task": "think_recaption",
+                    "size": "1280x720",
+                },
+                files=[("image", (f"image_{i}.png", pil_to_png_bytes(img), "image/png")) for i, img in enumerate(images)],
+                timeout=600,
+            )
+            elapsed = time.perf_counter() - t0
+            if not response.ok:
+                print(f"[ONLINE] HTTP {response.status_code} response body: {response.text}")
+            response.raise_for_status()
+            payload = response.json()
+            assert len(payload["data"]) == 1
+            image = decode_base64_image(payload["data"][0]["b64_json"])
+            image.load()
+            image.save(output_path / "image_online.png")
+            cot_text = payload["data"][0].get("revised_prompt") or ""
+            (output_path / "cot_online.txt").write_text(cot_text, encoding="utf-8")
+            return image, cot_text, elapsed
+    finally:
         gc.collect()
         if torch.accelerator.is_available():
             torch.accelerator.empty_cache()
-        return image, cot_text, elapsed
 
 
 @pytest.mark.skipif(

@@ -1548,7 +1548,7 @@ async def generate_images(request: ImageGenerationRequest, raw_request: Request)
                 )
             flat_images, ar_text, _, _ = generation_result
             image_data = [
-                ImageData(b64_json=encode_image_base64(img), revised_prompt=ar_text if i == 0 else None)
+                ImageData(b64_json=encode_image_base64(img), revised_prompt=(ar_text or None) if i == 0 else None)
                 for i, img in enumerate(flat_images)
             ]
             return ImageGenerationResponse(created=int(time.time()), data=image_data)
