@@ -230,6 +230,14 @@ def main():
     from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
     ar_stop_token_ids = resolve_stop_token_ids(task=task, bot_task=bot_task, tokenizer=tokenizer)
+    # ---- Diagnostic: log stop_token_ids to file ----
+    import pathlib as _pathlib
+    _diag_path = _pathlib.Path(args.output) / "stop_token_ids_diag.txt"
+    _diag_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(_diag_path, "a", encoding="utf-8") as _f:
+        _f.write(f"task={task}, bot_task={bot_task}, ar_stop_token_ids={ar_stop_token_ids}\n")
+    print(f"[DIAG] stop_token_ids written to {_diag_path}")
+    print(f"[DIAG] task={task}, bot_task={bot_task}, stop_token_ids len={len(ar_stop_token_ids)}, values={ar_stop_token_ids[:5]}...{ar_stop_token_ids[-3:] if len(ar_stop_token_ids)>5 else ''}")
     for sp in params_list:
         if isinstance(sp, OmniDiffusionSamplingParams):
             sp.num_inference_steps = args.steps
@@ -285,6 +293,19 @@ def main():
                 txt = ar_text or ""
         if txt:
             print(f"[Output] Text:\n{txt}")
+            # ---- Diagnostic: log AR output tail to file ----
+            with open(_diag_path, "a", encoding="utf-8") as _f:
+                _f.write(f"ar_text tail (last 100 chars): ...{txt[-100:]}\n")
+            # Also log token IDs if available
+            if ro and getattr(ro, "outputs", None):
+                for o in ro.outputs:
+                    cum_ids = getattr(o, "cumulative_token_ids", None)
+                    if cum_ids is not None:
+                        tail_ids = list(cum_ids)[-10:]
+                        with open(_diag_path, "a", encoding="utf-8") as _f:
+                            _f.write(f"ar_token_ids tail (last 10): {tail_ids}\n")
+                        print(f"[DIAG] ar_token_ids tail: {tail_ids}")
+                        break
 
         images = getattr(req_output, "images", None)
         if not images and ro and hasattr(ro, "images"):
