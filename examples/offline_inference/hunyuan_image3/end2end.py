@@ -234,10 +234,13 @@ def main():
     import pathlib as _pathlib
     _diag_path = _pathlib.Path(args.output) / "stop_token_ids_diag.txt"
     _diag_path.parent.mkdir(parents=True, exist_ok=True)
+    _diag_image_size = "auto" if (args.modality in ("img2text", "text2text")) else f"{args.width}x{args.height}"
     with open(_diag_path, "a", encoding="utf-8") as _f:
-        _f.write(f"task={task}, bot_task={bot_task}, ar_stop_token_ids={ar_stop_token_ids}\n")
+        _f.write(f"task={task}, bot_task={bot_task}, image_size={_diag_image_size}, "
+                 f"ar_stop_token_ids={ar_stop_token_ids}\n")
     print(f"[DIAG] stop_token_ids written to {_diag_path}")
-    print(f"[DIAG] task={task}, bot_task={bot_task}, stop_token_ids len={len(ar_stop_token_ids)}, values={ar_stop_token_ids[:5]}...{ar_stop_token_ids[-3:] if len(ar_stop_token_ids)>5 else ''}")
+    print(f"[DIAG] task={task}, bot_task={bot_task}, image_size={_diag_image_size}, "
+          f"stop_token_ids len={len(ar_stop_token_ids)}")
     for sp in params_list:
         if isinstance(sp, OmniDiffusionSamplingParams):
             sp.num_inference_steps = args.steps
