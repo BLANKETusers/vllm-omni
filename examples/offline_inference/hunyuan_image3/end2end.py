@@ -229,12 +229,20 @@ def main():
 
     from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
-    ar_stop_token_ids = resolve_stop_token_ids(task=task, bot_task=bot_task, tokenizer=tokenizer)
+    import sys
+    user_specified_size = "--height" in sys.argv or "--width" in sys.argv
+    if args.modality in ("img2text", "text2text"):
+        ar_image_size = "auto"
+    elif user_specified_size:
+        ar_image_size = f"{args.width}x{args.height}"
+    else:
+        ar_image_size = None
+    ar_stop_token_ids = resolve_stop_token_ids(task=task, bot_task=bot_task, tokenizer=tokenizer, image_size=ar_image_size)
     # ---- Diagnostic: log stop_token_ids to file ----
     import pathlib as _pathlib
     _diag_path = _pathlib.Path(args.output) / "stop_token_ids_diag.txt"
     _diag_path.parent.mkdir(parents=True, exist_ok=True)
-    _diag_image_size = "auto" if (args.modality in ("img2text", "text2text")) else f"{args.width}x{args.height}"
+    _diag_image_size = ar_image_size
     with open(_diag_path, "a", encoding="utf-8") as _f:
         _f.write(f"task={task}, bot_task={bot_task}, image_size={_diag_image_size}, "
                  f"ar_stop_token_ids={ar_stop_token_ids}\n")
