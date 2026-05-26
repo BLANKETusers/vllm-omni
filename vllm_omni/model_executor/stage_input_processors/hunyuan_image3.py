@@ -234,7 +234,8 @@ def ar2diffusion(
 
         logger.info(
             "[ar2diffusion] Request %d: AR generated %d tokens, text length=%d, "
-            "cot_text length=%d, target size=%dx%d (%s)",
+            "cot_text length=%d, target size=%dx%d (%s), "
+            "AR output tail (last 100 chars): ...%s",
             i,
             len(generated_token_ids),
             len(generated_text),
@@ -242,6 +243,7 @@ def ar2diffusion(
             height,
             width,
             f"AR ratio_idx={ratio_idx}" if ar_predicted else "from prompt (no AR ratio token)",
+            generated_text[-100:] if generated_text else "",
         )
 
         diffusion_input: dict[str, Any] = {
