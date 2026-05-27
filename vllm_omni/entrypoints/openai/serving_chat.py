@@ -2365,13 +2365,16 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
 
         comprehension_idx = None
         for idx, stage in enumerate(stage_configs):
-            if getattr(stage, "is_comprehension", False):
+            # is_comprehension may be at the top level (StageConfig object)
+            # or nested inside engine_args (DictConfig from OmegaConf).
+            is_comp = getattr(stage, "is_comprehension", None)
+            if is_comp is None:
+                engine_args = getattr(stage, "engine_args", None)
+                if engine_args is not None:
+                    is_comp = engine_args.get("is_comprehension", False)
+            if is_comp:
                 comprehension_idx = idx
                 break
-        # [DIAG] Verify comprehension_idx and stop_token_ids flow
-        print(f"[DIAG] stage_configs={stage_configs}, comprehension_idx={comprehension_idx}")
-        for idx, stage in enumerate(stage_configs):
-            print(f"[DIAG] stage[{idx}] is_comprehension={getattr(stage, 'is_comprehension', 'N/A')}, type={type(stage).__name__}")
 
         sampling_params_list = build_stage_sampling_params_list(
             stage_configs,
