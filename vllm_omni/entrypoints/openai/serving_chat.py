@@ -2367,8 +2367,10 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
         for idx, stage in enumerate(stage_configs):
             # is_comprehension may be at the top level (StageConfig object)
             # or nested inside engine_args (DictConfig from OmegaConf).
+            # DictConfig has is_comprehension=False at top level but True
+            # inside engine_args, so we must check engine_args as well.
             is_comp = getattr(stage, "is_comprehension", None)
-            if is_comp is None:
+            if not is_comp:
                 engine_args = getattr(stage, "engine_args", None)
                 if engine_args is not None:
                     is_comp = engine_args.get("is_comprehension", False)
