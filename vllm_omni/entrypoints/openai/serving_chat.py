@@ -2284,10 +2284,6 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
         use_system_prompt = extra_body.get("use_system_prompt") or extra_body.get("sys_type")
         custom_system_prompt = extra_body.get("system_prompt")
 
-        # Always compute task and bot_task (not only when build_kwargs has
-        # values), so resolve_stop_token_ids can be called for every request.
-        task = "it2i" if reference_images else "t2i"
-
         engine_prompt_data: dict[str, Any] | None = None
         modalities = ["image"]
         if reference_images:
@@ -2308,7 +2304,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
             )
 
             build_kwargs: dict[str, Any] = {
-                "task": task,
+                "task": "it2i" if reference_images else "t2i",
                 "sys_type": use_system_prompt,
                 "custom_system_prompt": custom_system_prompt,
                 "num_images": len(reference_images) if reference_images else 1,
@@ -2365,16 +2361,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
 
         comprehension_idx = None
         for idx, stage in enumerate(stage_configs):
-            # is_comprehension may be at the top level (StageConfig object)
-            # or nested inside engine_args (DictConfig from OmegaConf).
-            # DictConfig has is_comprehension=False at top level but True
-            # inside engine_args, so we must check engine_args as well.
-            is_comp = getattr(stage, "is_comprehension", None)
-            if not is_comp:
-                engine_args = getattr(stage, "engine_args", None)
-                if engine_args is not None:
-                    is_comp = engine_args.get("is_comprehension", False)
-            if is_comp:
+            if getattr(stage, "is_comprehension", False):
                 comprehension_idx = idx
                 break
 
@@ -2387,20 +2374,25 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
             stage_type = get_stage_type(stage_cfg)
             default_stage_params = sampling_params_list[idx]
 
-            if comprehension_idx is not None and idx == comprehension_idx:
-                # Set AR stop_token_ids for HunyuanImage3, matching official
-                # final_stop_tokens logic. Without this, AR generates until
-                # max_tokens instead of stopping at the correct terminator.
+            # Set AR stop_token_ids for HunyuanImage3, matching official
+            # final_stop_tokens logic. Without this, AR generates until
+            # max_tokens instead of stopping at the correct terminator.
+            # Use stage_type=="llm" to identify the AR stage without
+            # relying on comprehension_idx (which may be None for
+            # DictConfig stage_configs where is_comprehension is nested
+            # inside engine_args).
+            if stage_type == "llm":
                 from vllm_omni.diffusion.models.hunyuan_image3.prompt_utils import (
                     resolve_stop_token_ids,
                 )
+                ar_task = "it2i" if reference_images else "t2i"
                 # ar_image_size: None -> need_ratio=True (AR predicts ratio);
                 # explicit size -> need_ratio=False (AR stops at terminator).
                 ar_image_size: str | None = None
                 if height is not None and width is not None:
                     ar_image_size = f"{width}x{height}"
                 ar_stop_token_ids = resolve_stop_token_ids(
-                    task=task, bot_task=bot_task, tokenizer=tokenizer,
+                    task=ar_task, bot_task=bot_task, tokenizer=tokenizer,
                     image_size=ar_image_size,
                 )
                 default_stage_params.stop_token_ids = ar_stop_token_ids
