@@ -2284,6 +2284,10 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
         use_system_prompt = extra_body.get("use_system_prompt") or extra_body.get("sys_type")
         custom_system_prompt = extra_body.get("system_prompt")
 
+        # Always compute task and bot_task (not only when build_kwargs has
+        # values), so resolve_stop_token_ids can be called for every request.
+        task = "it2i" if reference_images else "t2i"
+
         engine_prompt_data: dict[str, Any] | None = None
         modalities = ["image"]
         if reference_images:
@@ -2304,7 +2308,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
             )
 
             build_kwargs: dict[str, Any] = {
-                "task": "it2i" if reference_images else "t2i",
+                "task": task,
                 "sys_type": use_system_prompt,
                 "custom_system_prompt": custom_system_prompt,
                 "num_images": len(reference_images) if reference_images else 1,
@@ -2374,11 +2378,23 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
             stage_type = get_stage_type(stage_cfg)
             default_stage_params = sampling_params_list[idx]
 
-            # [DIAG] Print AR stage stop_token_ids to verify if it's missing
             if comprehension_idx is not None and idx == comprehension_idx:
-                print(
-                    f"[DIAG] AR stage stop_token_ids={getattr(default_stage_params, 'stop_token_ids', None)}"
+                # Set AR stop_token_ids for HunyuanImage3, matching official
+                # final_stop_tokens logic. Without this, AR generates until
+                # max_tokens instead of stopping at the correct terminator.
+                from vllm_omni.diffusion.models.hunyuan_image3.prompt_utils import (
+                    resolve_stop_token_ids,
                 )
+                # ar_image_size: None -> need_ratio=True (AR predicts ratio);
+                # explicit size -> need_ratio=False (AR stops at terminator).
+                ar_image_size: str | None = None
+                if height is not None and width is not None:
+                    ar_image_size = f"{width}x{height}"
+                ar_stop_token_ids = resolve_stop_token_ids(
+                    task=task, bot_task=bot_task, tokenizer=tokenizer,
+                    image_size=ar_image_size,
+                )
+                default_stage_params.stop_token_ids = ar_stop_token_ids
 
             if (
                 comprehension_idx is not None
