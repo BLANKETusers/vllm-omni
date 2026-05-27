@@ -2374,6 +2374,13 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
             stage_type = get_stage_type(stage_cfg)
             default_stage_params = sampling_params_list[idx]
 
+            # [DIAG] Print AR stage stop_token_ids to verify if it's missing
+            if comprehension_idx is not None and idx == comprehension_idx:
+                logger.info(
+                    "[DIAG] AR stage stop_token_ids=%s",
+                    getattr(default_stage_params, "stop_token_ids", None),
+                )
+
             if (
                 comprehension_idx is not None
                 and idx == comprehension_idx
