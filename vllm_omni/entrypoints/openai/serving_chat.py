@@ -2368,6 +2368,10 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
             if getattr(stage, "is_comprehension", False):
                 comprehension_idx = idx
                 break
+        # [DIAG] Verify comprehension_idx and stop_token_ids flow
+        print(f"[DIAG] stage_configs={stage_configs}, comprehension_idx={comprehension_idx}")
+        for idx, stage in enumerate(stage_configs):
+            print(f"[DIAG] stage[{idx}] is_comprehension={getattr(stage, 'is_comprehension', 'N/A')}, type={type(stage).__name__}")
 
         sampling_params_list = build_stage_sampling_params_list(
             stage_configs,
