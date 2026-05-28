@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import base64
+import copy
 import io
 import os
+import tempfile
 from pathlib import Path
 
 import pytest
 import requests
+import yaml
 from PIL import Image
 
 from tests.e2e.accuracy.helpers import assert_images_pixel_close, model_output_dir
@@ -27,22 +30,61 @@ P99_THRESHOLD = 0.10
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 BASELINE_PATH = _REPO_ROOT / "tests" / "assets" / "hunyuan" / "hunyuan_baseline.png"
-_DEFAULT_DEPLOY_CONFIG = _REPO_ROOT / "vllm_omni" / "deploy" / "hunyuan_image3.yaml"
 _OFFLINE_SCRIPT = _REPO_ROOT / "examples" / "offline_inference" / "hunyuan_image3" / "end2end.py"
+
+# DiT-only deploy config with trust_remote_code (based on hunyuan_image3_dit.yaml).
+_DEPLOY_CONFIG = {
+    "pipeline": "hunyuan_image3_dit",
+    "async_chunk": False,
+    "trust_remote_code": True,
+    "stages": [
+        {
+            "stage_id": 0,
+            "max_num_seqs": 1,
+            "gpu_memory_utilization": 0.9,
+            "enforce_eager": True,
+            "trust_remote_code": True,
+            "devices": "4,5",
+            "vae_use_slicing": False,
+            "vae_use_tiling": False,
+            "parallel_config": {
+                "pipeline_parallel_size": 1,
+                "data_parallel_size": 1,
+                "tensor_parallel_size": 2,
+                "enable_expert_parallel": True,
+                "sequence_parallel_size": 1,
+                "ulysses_degree": 1,
+                "ring_degree": 1,
+                "cfg_parallel_size": 1,
+                "vae_patch_parallel_size": 1,
+                "use_hsdp": False,
+                "hsdp_shard_size": -1,
+                "hsdp_replicate_size": 1,
+            },
+            "default_sampling_params": {
+                "seed": SEED,
+            },
+        },
+    ],
+}
 
 
 def _model_name() -> str:
     return os.environ.get("HUNYUAN_IMAGE3_MODEL", MODEL_NAME)
 
 
-def _deploy_config_path() -> str:
-    return os.environ.get("HUNYUAN_IMAGE3_DEPLOY_CONFIG", str(_DEFAULT_DEPLOY_CONFIG))
+def _write_deploy_config(path: Path) -> None:
+    config = copy.deepcopy(_DEPLOY_CONFIG)
+    env_devices = os.environ.get("HUNYUAN_IMAGE3_DEVICES")
+    if env_devices:
+        config["stages"][0]["devices"] = env_devices
+        config["stages"][0]["parallel_config"]["tensor_parallel_size"] = len(env_devices.split(","))
+    path.write_text(yaml.dump(config, default_flow_style=False, sort_keys=False))
 
 
 def _run_vllm_omni_hunyuan_image3_online(
-    *, model: str, deploy_config: str | None = None, output_path: Path
+    *, model: str, deploy_config: str, output_path: Path
 ) -> Image.Image:
-    deploy_config = deploy_config or _deploy_config_path()
     server_args = [
         "--deploy-config", deploy_config,
         "--stage-init-timeout", "300",
@@ -78,11 +120,10 @@ def _run_vllm_omni_hunyuan_image3_online(
 
 
 def _run_vllm_omni_hunyuan_image3_offline(
-    *, model: str, deploy_config: str | None = None, output_path: Path
+    *, model: str, deploy_config: str, output_path: Path
 ) -> Image.Image:
     import subprocess
 
-    deploy_config = deploy_config or _deploy_config_path()
     output_dir = str(output_path.parent)
     subprocess.run(
         [
@@ -125,13 +166,27 @@ def _assert_against_baseline(image: Image.Image, label: str) -> None:
 
 @hardware_test(res={"cuda": "H100"}, num_cards=4)
 def test_hunyuan_image3_pixel_accuracy_online(accuracy_artifact_root: Path) -> None:
+    model = _model_name()
     output_dir = model_output_dir(accuracy_artifact_root, MODEL_NAME)
-    image = _run_vllm_omni_hunyuan_image3_online(model=_model_name(), output_path=output_dir / "vllm_omni_online.png")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        deploy_config_path = Path(tmpdir) / "deploy.yaml"
+        _write_deploy_config(deploy_config_path)
+        image = _run_vllm_omni_hunyuan_image3_online(
+            model=model, deploy_config=str(deploy_config_path), output_path=output_dir / "vllm_omni_online.png"
+        )
     _assert_against_baseline(image, "online")
 
 
 @hardware_test(res={"cuda": "H100"}, num_cards=4)
 def test_hunyuan_image3_pixel_accuracy_offline(accuracy_artifact_root: Path) -> None:
+    model = _model_name()
     output_dir = model_output_dir(accuracy_artifact_root, MODEL_NAME)
-    image = _run_vllm_omni_hunyuan_image3_offline(model=_model_name(), output_path=output_dir / "vllm_omni_offline.png")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        deploy_config_path = Path(tmpdir) / "deploy.yaml"
+        _write_deploy_config(deploy_config_path)
+        image = _run_vllm_omni_hunyuan_image3_offline(
+            model=model, deploy_config=str(deploy_config_path), output_path=output_dir / "vllm_omni_offline.png"
+        )
     _assert_against_baseline(image, "offline")
