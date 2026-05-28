@@ -243,7 +243,6 @@ def ar2diffusion(
             height,
             width,
             f"AR ratio_idx={ratio_idx}" if ar_predicted else "from prompt (no AR ratio token)",
-            generated_text[-100:] if generated_text else "",
         )
 
         diffusion_input: dict[str, Any] = {

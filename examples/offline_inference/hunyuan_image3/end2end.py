@@ -61,8 +61,8 @@ def parse_args():
     parser.add_argument("--steps", type=int, default=50, help="Number of inference steps.")
     parser.add_argument("--guidance-scale", type=float, default=5.0, help="Classifier-free guidance scale.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
-    parser.add_argument("--height", type=int, default=1024, help="Output image height.")
-    parser.add_argument("--width", type=int, default=1024, help="Output image width.")
+    parser.add_argument("--height", type=int, default=None, help="Output image height.")
+    parser.add_argument("--width", type=int, default=None, help="Output image width.")
     parser.add_argument("--vae-use-tiling", action="store_true", help="Enable VAE tiling.")
     parser.add_argument(
         "--bot-task",
@@ -227,15 +227,13 @@ def main():
 
     params_list = list(omni.default_sampling_params_list)
 
-    import sys
-
     from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
-    user_specified_size = "--height" in sys.argv or "--width" in sys.argv
+    user_specified_size = args.height is not None or args.width is not None
     if args.modality in ("img2text", "text2text"):
         ar_image_size = "auto"
     elif user_specified_size:
-        ar_image_size = f"{args.width}x{args.height}"
+        ar_image_size = f"{args.width or 1024}x{args.height or 1024}"
     else:
         ar_image_size = None
     ar_stop_token_ids = resolve_stop_token_ids(
@@ -276,7 +274,7 @@ def main():
         print(f"  diffusion_kv_cache_skip_steps: {args.diffusion_kv_cache_skip_steps}")
         print(f"  diffusion_kv_cache_skip_layers: {args.diffusion_kv_cache_skip_layers}")
     if args.modality == "text2img":
-        print(f"  Output size: {args.width}x{args.height}")
+        print(f"  Output size: {args.width or 1024}x{args.height or 1024}")
     if args.image_path:
         print(f"  Input image: {args.image_path}")
     if additional_config is not None:

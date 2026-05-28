@@ -2296,11 +2296,26 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
         prompt_token_ids: list[int] | None = None
         system_prompt_type: str | None = None
         build_kwargs: dict[str, Any] = {}
+        ar_stop_token_ids: list[int] | None = None
 
         if bot_task is not None or use_system_prompt is not None or custom_system_prompt is not None:
             from vllm_omni.diffusion.models.hunyuan_image3.prompt_utils import (
                 build_prompt,
                 build_prompt_tokens,
+                resolve_stop_token_ids,
+            )
+
+            ar_task = "it2i" if reference_images else "t2i"
+            # ar_image_size: None -> need_ratio=True (AR predicts ratio);
+            # explicit size -> need_ratio=False (AR stops at terminator).
+            ar_image_size: str | None = None
+            if height is not None and width is not None:
+                ar_image_size = f"{width}x{height}"
+            ar_stop_token_ids = resolve_stop_token_ids(
+                task=ar_task,
+                bot_task=bot_task,
+                tokenizer=tokenizer,
+                image_size=ar_image_size,
             )
 
             build_kwargs: dict[str, Any] = {
@@ -2381,23 +2396,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
             # relying on comprehension_idx (which may be None for
             # DictConfig stage_configs where is_comprehension is nested
             # inside engine_args).
-            if stage_type == "llm":
-                from vllm_omni.diffusion.models.hunyuan_image3.prompt_utils import (
-                    resolve_stop_token_ids,
-                )
-
-                ar_task = "it2i" if reference_images else "t2i"
-                # ar_image_size: None -> need_ratio=True (AR predicts ratio);
-                # explicit size -> need_ratio=False (AR stops at terminator).
-                ar_image_size: str | None = None
-                if height is not None and width is not None:
-                    ar_image_size = f"{width}x{height}"
-                ar_stop_token_ids = resolve_stop_token_ids(
-                    task=ar_task,
-                    bot_task=bot_task,
-                    tokenizer=tokenizer,
-                    image_size=ar_image_size,
-                )
+            if stage_type == "llm" and ar_stop_token_ids is not None:
                 default_stage_params.stop_token_ids = ar_stop_token_ids
 
             if (
