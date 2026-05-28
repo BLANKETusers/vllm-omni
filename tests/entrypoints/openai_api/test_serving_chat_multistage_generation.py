@@ -460,6 +460,9 @@ def test_build_multistage_generation_inputs_no_stop_token_ids_without_size(servi
         gen_params=OmniDiffusionSamplingParams(),
     )
 
-    assert sampling_params_list[0].stop_token_ids is None, (
-        "Without bot_task, AR stage stop_token_ids must be None"
+    # SamplingParams defaults stop_token_ids=[], not None.
+    # The key contract: it was NOT set by resolve_stop_token_ids,
+    # so it stays as the SamplingParams default (empty list).
+    assert sampling_params_list[0].stop_token_ids == [], (
+        "Without bot_task, AR stage stop_token_ids must be the default empty list"
     )
