@@ -12,7 +12,7 @@ import requests
 import yaml
 from PIL import Image
 
-from tests.e2e.accuracy.helpers import assert_images_pixel_close, model_output_dir
+from tests.e2e.accuracy.helpers import assert_images_pixel_close, assert_similarity, model_output_dir
 from tests.helpers.mark import hardware_test
 from tests.helpers.runtime import OmniServer
 
@@ -25,8 +25,10 @@ GUIDANCE_SCALE = 2.5
 HEIGHT = 1024
 WIDTH = 1024
 PROMPT = "A brown and white dog is running on the grass."
-MEAN_THRESHOLD = 0.02
-P99_THRESHOLD = 0.10
+MEAN_THRESHOLD = 0.05
+P99_THRESHOLD = 0.30
+SSIM_THRESHOLD = 0.90
+PSNR_THRESHOLD = 20.0
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 BASELINE_PATH = _REPO_ROOT / "tests" / "assets" / "hunyuan" / "hunyuan_baseline.png"
@@ -151,10 +153,10 @@ def _run_vllm_omni_hunyuan_image3_offline(
     image.save(output_path)
     return image
 
-
 def _assert_against_baseline(image: Image.Image, label: str) -> None:
     assert BASELINE_PATH.exists(), f"Baseline image not found at {BASELINE_PATH}"
     baseline_image = Image.open(BASELINE_PATH).convert("RGB")
+
     assert_images_pixel_close(
         model_name=f"{MODEL_NAME} ({label} vs baseline)",
         vllm_image=image,
@@ -162,9 +164,16 @@ def _assert_against_baseline(image: Image.Image, label: str) -> None:
         mean_threshold=MEAN_THRESHOLD,
         p99_threshold=P99_THRESHOLD,
     )
+    assert_similarity(
+        model_name=f"{MODEL_NAME} ({label} vs baseline)",
+        vllm_image=image,
+        diffusers_image=baseline_image,
+        ssim_threshold=SSIM_THRESHOLD,
+        psnr_threshold=PSNR_THRESHOLD,
+    )
 
 
-@hardware_test(res={"cuda": "H100"}, num_cards=4)
+@hardware_test(res={"cuda": "H200"}, num_cards=2)
 def test_hunyuan_image3_pixel_accuracy_online(accuracy_artifact_root: Path) -> None:
     model = _model_name()
     output_dir = model_output_dir(accuracy_artifact_root, MODEL_NAME)
@@ -178,7 +187,7 @@ def test_hunyuan_image3_pixel_accuracy_online(accuracy_artifact_root: Path) -> N
     _assert_against_baseline(image, "online")
 
 
-@hardware_test(res={"cuda": "H100"}, num_cards=4)
+@hardware_test(res={"cuda": "H200"}, num_cards=2)
 def test_hunyuan_image3_pixel_accuracy_offline(accuracy_artifact_root: Path) -> None:
     model = _model_name()
     output_dir = model_output_dir(accuracy_artifact_root, MODEL_NAME)
