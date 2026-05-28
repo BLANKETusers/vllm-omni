@@ -227,9 +227,10 @@ def main():
 
     params_list = list(omni.default_sampling_params_list)
 
+    import sys
+
     from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
-    import sys
     user_specified_size = "--height" in sys.argv or "--width" in sys.argv
     if args.modality in ("img2text", "text2text"):
         ar_image_size = "auto"
@@ -237,8 +238,12 @@ def main():
         ar_image_size = f"{args.width}x{args.height}"
     else:
         ar_image_size = None
-    ar_stop_token_ids = resolve_stop_token_ids(task=task, bot_task=bot_task, tokenizer=tokenizer, image_size=ar_image_size)
-    print(f"[AR Config] task={task}, bot_task={bot_task}, image_size={ar_image_size}, stop_token_ids={ar_stop_token_ids}")
+    ar_stop_token_ids = resolve_stop_token_ids(
+        task=task, bot_task=bot_task, tokenizer=tokenizer, image_size=ar_image_size
+    )
+    print(
+        f"[AR Config] task={task}, bot_task={bot_task}, image_size={ar_image_size}, stop_token_ids={ar_stop_token_ids}"
+    )
     for sp in params_list:
         if isinstance(sp, OmniDiffusionSamplingParams):
             sp.num_inference_steps = args.steps

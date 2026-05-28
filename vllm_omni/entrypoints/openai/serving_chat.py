@@ -2385,6 +2385,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
                 from vllm_omni.diffusion.models.hunyuan_image3.prompt_utils import (
                     resolve_stop_token_ids,
                 )
+
                 ar_task = "it2i" if reference_images else "t2i"
                 # ar_image_size: None -> need_ratio=True (AR predicts ratio);
                 # explicit size -> need_ratio=False (AR stops at terminator).
@@ -2392,7 +2393,9 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
                 if height is not None and width is not None:
                     ar_image_size = f"{width}x{height}"
                 ar_stop_token_ids = resolve_stop_token_ids(
-                    task=ar_task, bot_task=bot_task, tokenizer=tokenizer,
+                    task=ar_task,
+                    bot_task=bot_task,
+                    tokenizer=tokenizer,
                     image_size=ar_image_size,
                 )
                 default_stage_params.stop_token_ids = ar_stop_token_ids
