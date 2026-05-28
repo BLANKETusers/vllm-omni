@@ -48,6 +48,7 @@ def _run_vllm_omni_hunyuan_image3_online(
         "--stage-init-timeout", "300",
         "--init-timeout", "900",
         "--enforce-eager",
+        "--trust-remote-code",
     ]
     with OmniServer(model, server_args, use_omni=True) as omni_server:
         response = requests.post(
