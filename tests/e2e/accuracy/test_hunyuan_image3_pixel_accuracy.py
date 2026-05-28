@@ -47,6 +47,7 @@ def _run_vllm_omni_hunyuan_image3_online(
         "--deploy-config", deploy_config,
         "--stage-init-timeout", "300",
         "--init-timeout", "900",
+        "--enforce-eager",
     ]
     with OmniServer(model, server_args, use_omni=True) as omni_server:
         response = requests.post(
@@ -60,6 +61,8 @@ def _run_vllm_omni_hunyuan_image3_online(
                 "num_inference_steps": NUM_INFERENCE_STEPS,
                 "guidance_scale": GUIDANCE_SCALE,
                 "seed": SEED,
+                "bot_task": "none",
+                "use_system_prompt": "en_unified",
             },
             timeout=600,
         )
@@ -83,13 +86,19 @@ def _run_vllm_omni_hunyuan_image3_offline(
     subprocess.run(
         [
             "python", str(_OFFLINE_SCRIPT),
-            "--model", model,
             "--modality", "text2img",
             "--deploy-config", deploy_config,
             "--prompts", PROMPT,
             "--output", output_dir,
+            "--steps", str(NUM_INFERENCE_STEPS),
             "--guidance-scale", str(GUIDANCE_SCALE),
             "--seed", str(SEED),
+            "--height", str(HEIGHT),
+            "--width", str(WIDTH),
+            "--bot-task", "none",
+            "--sys-type", "en_unified",
+            "--model", model,
+            "--enforce-eager",
         ],
         check=True,
     )
@@ -101,43 +110,27 @@ def _run_vllm_omni_hunyuan_image3_offline(
     return image
 
 
-@hardware_test(res={"cuda": "H100"}, num_cards=4)
-def test_hunyuan_image3_pixel_accuracy(accuracy_artifact_root: Path) -> None:
-    model = _model_name()
-    output_dir = model_output_dir(accuracy_artifact_root, MODEL_NAME)
-
-    # online
-    # online_output = _run_vllm_omni_hunyuan_image3_online(model=model, output_path=output_dir / "vllm_omni_online.png")
-    # offline
-    offline_output = _run_vllm_omni_hunyuan_image3_offline(model=model, output_path=output_dir / "vllm_omni_offline.png")
-
-    # online vs offline: same seed / params, different serving paths → must be pixel-close.
-    # assert_images_pixel_close(
-    #     model_name=f"{MODEL_NAME} (online vs offline)",
-    #     vllm_image=online_output,
-    #     diffusers_image=offline_output,
-    #     mean_threshold=MEAN_THRESHOLD,
-    #     p99_threshold=P99_THRESHOLD,
-    # )
-
-    # Baseline regression check: requires hunyuan_baseline.png generated from the
-    # same vllm-omni serving path and seed.
+def _assert_against_baseline(image: Image.Image, label: str) -> None:
     assert BASELINE_PATH.exists(), f"Baseline image not found at {BASELINE_PATH}"
     baseline_image = Image.open(BASELINE_PATH).convert("RGB")
-
     assert_images_pixel_close(
-        model_name=f"{MODEL_NAME} (offline vs baseline)",
-        vllm_image=offline_output,
+        model_name=f"{MODEL_NAME} ({label} vs baseline)",
+        vllm_image=image,
         diffusers_image=baseline_image,
         mean_threshold=MEAN_THRESHOLD,
         p99_threshold=P99_THRESHOLD,
     )
 
-    # online vs baseline_image
-    # assert_images_pixel_close(
-    #     model_name=f"{MODEL_NAME} (online vs baseline)",
-    #     vllm_image=online_output,
-    #     diffusers_image=baseline_image,
-    #     mean_threshold=MEAN_THRESHOLD,
-    #     p99_threshold=P99_THRESHOLD,
-    # )
+
+@hardware_test(res={"cuda": "H100"}, num_cards=4)
+def test_hunyuan_image3_pixel_accuracy_online(accuracy_artifact_root: Path) -> None:
+    output_dir = model_output_dir(accuracy_artifact_root, MODEL_NAME)
+    image = _run_vllm_omni_hunyuan_image3_online(model=_model_name(), output_path=output_dir / "vllm_omni_online.png")
+    _assert_against_baseline(image, "online")
+
+
+@hardware_test(res={"cuda": "H100"}, num_cards=4)
+def test_hunyuan_image3_pixel_accuracy_offline(accuracy_artifact_root: Path) -> None:
+    output_dir = model_output_dir(accuracy_artifact_root, MODEL_NAME)
+    image = _run_vllm_omni_hunyuan_image3_offline(model=_model_name(), output_path=output_dir / "vllm_omni_offline.png")
+    _assert_against_baseline(image, "offline")
