@@ -234,8 +234,7 @@ def ar2diffusion(
 
         logger.info(
             "[ar2diffusion] Request %d: AR generated %d tokens, text length=%d, "
-            "cot_text length=%d, target size=%dx%d (%s), "
-            "AR output tail (last 100 chars): ...%s",
+            "cot_text length=%d, target size=%dx%d (%s)",
             i,
             len(generated_token_ids),
             len(generated_text),
