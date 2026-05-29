@@ -229,11 +229,13 @@ def main():
 
     from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
-    user_specified_size = args.height is not None or args.width is not None
+    if (args.height is None) != (args.width is None):
+        raise ValueError("--height and --width must both be specified or both omitted.")
+    user_specified_size = args.height is not None and args.width is not None
     if args.modality in ("img2text", "text2text"):
         ar_image_size = "auto"
     elif user_specified_size:
-        ar_image_size = f"{args.width or 1024}x{args.height or 1024}"
+        ar_image_size = f"{args.width}x{args.height}"
     else:
         ar_image_size = None
     ar_stop_token_ids = resolve_stop_token_ids(
@@ -274,7 +276,7 @@ def main():
         print(f"  diffusion_kv_cache_skip_steps: {args.diffusion_kv_cache_skip_steps}")
         print(f"  diffusion_kv_cache_skip_layers: {args.diffusion_kv_cache_skip_layers}")
     if args.modality == "text2img":
-        print(f"  Output size: {args.width or 1024}x{args.height or 1024}")
+        print(f"  Output size: {args.width}x{args.height}")
     if args.image_path:
         print(f"  Input image: {args.image_path}")
     if additional_config is not None:

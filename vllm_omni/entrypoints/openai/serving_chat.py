@@ -2305,19 +2305,6 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
                 resolve_stop_token_ids,
             )
 
-            ar_task = "it2i" if reference_images else "t2i"
-            # ar_image_size: None -> need_ratio=True (AR predicts ratio);
-            # explicit size -> need_ratio=False (AR stops at terminator).
-            ar_image_size: str | None = None
-            if height is not None and width is not None:
-                ar_image_size = f"{width}x{height}"
-            ar_stop_token_ids = resolve_stop_token_ids(
-                task=ar_task,
-                bot_task=bot_task,
-                tokenizer=tokenizer,
-                image_size=ar_image_size,
-            )
-
             build_kwargs: dict[str, Any] = {
                 "task": "it2i" if reference_images else "t2i",
                 "sys_type": use_system_prompt,
@@ -2343,6 +2330,19 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
             if reference_images and len(reference_images) == 1:
                 engine_prompt_data = {"image": reference_images[0]}
                 modalities = ["image"]
+
+            ar_task = "it2i" if reference_images else "t2i"
+            # ar_image_size: None -> need_ratio=True (AR predicts ratio);
+            # explicit size -> need_ratio=False (AR stops at terminator).
+            ar_image_size: str | None = None
+            if height is not None and width is not None:
+                ar_image_size = f"{width}x{height}"
+            ar_stop_token_ids = resolve_stop_token_ids(
+                task=ar_task,
+                bot_task=bot_task,
+                tokenizer=tokenizer,
+                image_size=ar_image_size,
+            )
 
         engine_prompt: OmniTextPrompt = {"prompt": prompt}
         if prompt_token_ids is not None:
