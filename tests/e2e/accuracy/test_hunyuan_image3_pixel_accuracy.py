@@ -46,7 +46,7 @@ _DEPLOY_CONFIG = {
             "gpu_memory_utilization": 0.9,
             "enforce_eager": True,
             "trust_remote_code": True,
-            "devices": "4,5",
+            "devices": "4,5", # set dynamically by _write_deploy_config
             "vae_use_slicing": False,
             "vae_use_tiling": False,
             "parallel_config": {
@@ -75,12 +75,15 @@ def _model_name() -> str:
     return os.environ.get("HUNYUAN_IMAGE3_MODEL", MODEL_NAME)
 
 
+def _devices() -> str:
+    return os.environ.get("HUNYUAN_IMAGE3_DEVICES", "4,5")
+
+
 def _write_deploy_config(path: Path) -> None:
     config = copy.deepcopy(_DEPLOY_CONFIG)
-    env_devices = os.environ.get("HUNYUAN_IMAGE3_DEVICES")
-    if env_devices:
-        config["stages"][0]["devices"] = env_devices
-        config["stages"][0]["parallel_config"]["tensor_parallel_size"] = len(env_devices.split(","))
+    devices = _devices()
+    config["stages"][0]["devices"] = devices
+    config["stages"][0]["parallel_config"]["tensor_parallel_size"] = len(devices.split(","))
     path.write_text(yaml.dump(config, default_flow_style=False, sort_keys=False))
 
 
