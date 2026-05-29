@@ -46,7 +46,7 @@ _DEPLOY_CONFIG = {
             "gpu_memory_utilization": 0.9,
             "enforce_eager": True,
             "trust_remote_code": True,
-            "devices": "4,5", # set dynamically by _write_deploy_config
+            "devices": "4,5",  # set dynamically by _write_deploy_config
             "vae_use_slicing": False,
             "vae_use_tiling": False,
             "parallel_config": {
@@ -87,13 +87,14 @@ def _write_deploy_config(path: Path) -> None:
     path.write_text(yaml.dump(config, default_flow_style=False, sort_keys=False))
 
 
-def _run_vllm_omni_hunyuan_image3_online(
-    *, model: str, deploy_config: str, output_path: Path
-) -> Image.Image:
+def _run_vllm_omni_hunyuan_image3_online(*, model: str, deploy_config: str, output_path: Path) -> Image.Image:
     server_args = [
-        "--deploy-config", deploy_config,
-        "--stage-init-timeout", "300",
-        "--init-timeout", "900",
+        "--deploy-config",
+        deploy_config,
+        "--stage-init-timeout",
+        "300",
+        "--init-timeout",
+        "900",
         "--enforce-eager",
         "--trust-remote-code",
     ]
@@ -124,27 +125,38 @@ def _run_vllm_omni_hunyuan_image3_online(
         return image
 
 
-def _run_vllm_omni_hunyuan_image3_offline(
-    *, model: str, deploy_config: str, output_path: Path
-) -> Image.Image:
+def _run_vllm_omni_hunyuan_image3_offline(*, model: str, deploy_config: str, output_path: Path) -> Image.Image:
     import subprocess
 
     output_dir = str(output_path.parent)
     subprocess.run(
         [
-            "python", str(_OFFLINE_SCRIPT),
-            "--modality", "text2img",
-            "--deploy-config", deploy_config,
-            "--prompts", PROMPT,
-            "--output", output_dir,
-            "--steps", str(NUM_INFERENCE_STEPS),
-            "--guidance-scale", str(GUIDANCE_SCALE),
-            "--seed", str(SEED),
-            "--height", str(HEIGHT),
-            "--width", str(WIDTH),
-            "--bot-task", "none",
-            "--sys-type", "en_unified",
-            "--model", model,
+            "python",
+            str(_OFFLINE_SCRIPT),
+            "--modality",
+            "text2img",
+            "--deploy-config",
+            deploy_config,
+            "--prompts",
+            PROMPT,
+            "--output",
+            output_dir,
+            "--steps",
+            str(NUM_INFERENCE_STEPS),
+            "--guidance-scale",
+            str(GUIDANCE_SCALE),
+            "--seed",
+            str(SEED),
+            "--height",
+            str(HEIGHT),
+            "--width",
+            str(WIDTH),
+            "--bot-task",
+            "none",
+            "--sys-type",
+            "en_unified",
+            "--model",
+            model,
             "--enforce-eager",
         ],
         check=True,
@@ -155,6 +167,7 @@ def _run_vllm_omni_hunyuan_image3_offline(
     image.load()
     image.save(output_path)
     return image
+
 
 def _assert_against_baseline(image: Image.Image, label: str) -> None:
     assert BASELINE_PATH.exists(), f"Baseline image not found at {BASELINE_PATH}"
