@@ -25,10 +25,10 @@ GUIDANCE_SCALE = 2.5
 HEIGHT = 1024
 WIDTH = 1024
 PROMPT = "A brown and white dog is running on the grass."
-MEAN_THRESHOLD = 0.05
-P99_THRESHOLD = 0.30
-SSIM_THRESHOLD = 0.90
-PSNR_THRESHOLD = 20.0
+MEAN_THRESHOLD = 3e-2
+P99_THRESHOLD = 4e-1
+SSIM_THRESHOLD = 0.97
+PSNR_THRESHOLD = 30.0
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 BASELINE_PATH = _REPO_ROOT / "tests" / "assets" / "hunyuan" / "hunyuan_baseline.png"
