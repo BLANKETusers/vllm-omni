@@ -176,7 +176,7 @@ def _assert_against_baseline(image: Image.Image, label: str) -> None:
     )
 
 
-@hardware_test(res={"cuda": "H200"}, num_cards=2)
+@hardware_test(res={"cuda": "H100"}, num_cards=2)
 def test_hunyuan_image3_pixel_accuracy_online(accuracy_artifact_root: Path) -> None:
     model = _model_name()
     output_dir = model_output_dir(accuracy_artifact_root, MODEL_NAME)
@@ -190,7 +190,7 @@ def test_hunyuan_image3_pixel_accuracy_online(accuracy_artifact_root: Path) -> N
     _assert_against_baseline(image, "online")
 
 
-@hardware_test(res={"cuda": "H200"}, num_cards=2)
+@hardware_test(res={"cuda": "H100"}, num_cards=2)
 def test_hunyuan_image3_pixel_accuracy_offline(accuracy_artifact_root: Path) -> None:
     model = _model_name()
     output_dir = model_output_dir(accuracy_artifact_root, MODEL_NAME)
