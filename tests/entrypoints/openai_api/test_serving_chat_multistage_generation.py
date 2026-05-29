@@ -421,9 +421,7 @@ def test_build_multistage_generation_inputs_sets_ar_stop_token_ids_with_explicit
 
     # Diffusion stage (index 1) must NOT have stop_token_ids set.
     diff_params = sampling_params_list[1]
-    assert getattr(diff_params, "stop_token_ids", None) is None, (
-        "Diffusion stage must not have stop_token_ids set"
-    )
+    assert getattr(diff_params, "stop_token_ids", None) is None, "Diffusion stage must not have stop_token_ids set"
 
 
 def test_build_multistage_generation_inputs_no_stop_token_ids_without_size(serving_chat):

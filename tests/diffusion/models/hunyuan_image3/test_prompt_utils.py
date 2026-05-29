@@ -149,8 +149,7 @@ def test_resolve_stop_token_ids_explicit_image_size_stops_on_terminator():
         for task in ("t2i", "it2i"):
             result = resolve_stop_token_ids(task=task, bot_task=bot, tokenizer=tok, image_size="1024x1024")
             assert result == [end_of_recaption_id], (
-                f"task={task}, bot_task={bot}, image_size='1024x1024': "
-                f"expected [{end_of_recaption_id}], got {result}"
+                f"task={task}, bot_task={bot}, image_size='1024x1024': expected [{end_of_recaption_id}], got {result}"
             )
 
     # think -> [end_of_think, end_of_recaption]
@@ -170,8 +169,7 @@ def test_resolve_stop_token_ids_explicit_image_size_stops_on_terminator():
     for task in ("t2i", "it2i"):
         result = resolve_stop_token_ids(task=task, bot_task="vanilla", tokenizer=tok, image_size="1024x1024")
         assert result == expected_ratio, (
-            f"task={task}, bot_task='vanilla', image_size='1024x1024': "
-            f"expected ratio range, got {result}"
+            f"task={task}, bot_task='vanilla', image_size='1024x1024': expected ratio range, got {result}"
         )
 
     # Text tasks are unaffected by image_size.
