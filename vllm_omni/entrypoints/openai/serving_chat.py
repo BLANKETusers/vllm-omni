@@ -2389,13 +2389,8 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
             stage_type = get_stage_type(stage_cfg)
             default_stage_params = sampling_params_list[idx]
 
-            # Set AR stop_token_ids for HunyuanImage3, matching official
-            # final_stop_tokens logic. Without this, AR generates until
-            # max_tokens instead of stopping at the correct terminator.
-            # Use stage_type=="llm" to identify the AR stage without
-            # relying on comprehension_idx (which may be None for
-            # DictConfig stage_configs where is_comprehension is nested
-            # inside engine_args).
+            # AR stop tokens: use stage_type=="llm" instead of comprehension_idx
+            # (None for DictConfig where is_comprehension is nested in engine_args).
             if stage_type == "llm" and ar_stop_token_ids is not None:
                 default_stage_params.stop_token_ids = ar_stop_token_ids
 
