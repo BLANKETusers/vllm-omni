@@ -127,11 +127,12 @@ def _run_vllm_omni_hunyuan_image3_online(*, model: str, deploy_config: str, outp
 
 def _run_vllm_omni_hunyuan_image3_offline(*, model: str, deploy_config: str, output_path: Path) -> Image.Image:
     import subprocess
+    import sys
 
     output_dir = str(output_path.parent)
     subprocess.run(
         [
-            "python",
+            sys.executable,
             str(_OFFLINE_SCRIPT),
             "--modality",
             "text2img",
