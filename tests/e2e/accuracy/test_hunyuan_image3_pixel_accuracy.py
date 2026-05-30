@@ -46,13 +46,13 @@ _DEPLOY_CONFIG = {
             "gpu_memory_utilization": 0.9,
             "enforce_eager": True,
             "trust_remote_code": True,
-            "devices": "4,5",  # set dynamically by _write_deploy_config
+            "devices": "0,1,2,3",  # set dynamically by _write_deploy_config
             "vae_use_slicing": False,
             "vae_use_tiling": False,
             "parallel_config": {
                 "pipeline_parallel_size": 1,
                 "data_parallel_size": 1,
-                "tensor_parallel_size": 2,
+                "tensor_parallel_size": 4,
                 "enable_expert_parallel": True,
                 "sequence_parallel_size": 1,
                 "ulysses_degree": 1,
@@ -76,7 +76,7 @@ def _model_name() -> str:
 
 
 def _devices() -> str:
-    return os.environ.get("HUNYUAN_IMAGE3_DEVICES", "4,5")
+    return os.environ.get("HUNYUAN_IMAGE3_DEVICES", "0,1,2,3")
 
 
 def _write_deploy_config(path: Path) -> None:
@@ -189,7 +189,7 @@ def _assert_against_baseline(image: Image.Image, label: str) -> None:
     )
 
 
-@hardware_test(res={"cuda": "H100"}, num_cards=2)
+@hardware_test(res={"cuda": "H100"}, num_cards=4)
 def test_hunyuan_image3_pixel_accuracy_online(accuracy_artifact_root: Path) -> None:
     model = _model_name()
     output_dir = model_output_dir(accuracy_artifact_root, MODEL_NAME)
@@ -203,7 +203,7 @@ def test_hunyuan_image3_pixel_accuracy_online(accuracy_artifact_root: Path) -> N
     _assert_against_baseline(image, "online")
 
 
-@hardware_test(res={"cuda": "H100"}, num_cards=2)
+@hardware_test(res={"cuda": "H100"}, num_cards=4)
 def test_hunyuan_image3_pixel_accuracy_offline(accuracy_artifact_root: Path) -> None:
     model = _model_name()
     output_dir = model_output_dir(accuracy_artifact_root, MODEL_NAME)

@@ -746,9 +746,11 @@ steps:
                       path: /mnt/hf-cache
                       type: DirectoryOrCreate
 
-      - label: ":full_moon: vllm-omni · HunyuanImage3 · Accuracy Test"
+      - label: ":full_moon: HunyuanImage3-DIT · Accuracy Test"
         timeout_in_minutes: 180
         commands:
+          - export HUNYUAN_IMAGE3_MODEL="tencent/HunyuanImage-3.0-Instruct"
+          - export HUNYUAN_IMAGE3_DEVICES="0,1,2,3"
           - pytest -s -v tests/e2e/accuracy/test_hunyuan_image3_pixel_accuracy.py --run-level full_model
         agents:
           queue: "mithril-h100-pool"
