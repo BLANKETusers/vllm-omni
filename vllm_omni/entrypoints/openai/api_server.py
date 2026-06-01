@@ -17,6 +17,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from http import HTTPStatus
 from numbers import Integral
+from pathlib import Path
 from typing import Annotated, Any, Literal, cast
 
 import httpx
@@ -55,13 +56,8 @@ from vllm.entrypoints.openai.engine.protocol import (
 from vllm.entrypoints.openai.models.protocol import BaseModelPath
 from vllm.entrypoints.openai.models.serving import OpenAIServingModels
 from vllm.entrypoints.openai.orca_metrics import metrics_header
-from vllm.entrypoints.openai.realtime.serving import OpenAIServingRealtime
 from vllm.entrypoints.openai.responses.serving import OpenAIServingResponses
 from vllm.entrypoints.openai.server_utils import get_uvicorn_log_config
-from vllm.entrypoints.openai.speech_to_text.serving import (
-    OpenAIServingTranscription,
-    OpenAIServingTranslation,
-)
 from vllm.entrypoints.openai.utils import validate_json_request
 from vllm.entrypoints.pooling.classify.serving import ServingClassification
 from vllm.entrypoints.pooling.embed.serving import ServingEmbedding as OpenAIServingEmbedding
@@ -74,6 +70,13 @@ from vllm.entrypoints.serve.disagg.serving import ServingTokens
 from vllm.entrypoints.serve.instrumentator.basic import base
 from vllm.entrypoints.serve.render.serving import OpenAIServingRender
 from vllm.entrypoints.serve.tokenize.serving import OpenAIServingTokenization
+from vllm.entrypoints.speech_to_text.realtime.serving import OpenAIServingRealtime
+from vllm.entrypoints.speech_to_text.transcription.serving import (
+    OpenAIServingTranscription,
+)
+from vllm.entrypoints.speech_to_text.translation.serving import (
+    OpenAIServingTranslation,
+)
 from vllm.entrypoints.utils import (
     create_error_response,
     load_aware_call,
@@ -131,6 +134,7 @@ from vllm_omni.entrypoints.openai.storage import STORAGE_MANAGER
 from vllm_omni.entrypoints.openai.stores import VIDEO_STORE, VIDEO_TASKS
 from vllm_omni.entrypoints.openai.utils import get_stage_type, parse_lora_request
 from vllm_omni.entrypoints.openai.video_api_utils import decode_input_reference
+from vllm_omni.entrypoints.openpi.serving import ServingRealtimeRobotOpenPI
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniTextPrompt
 
 logger = init_logger(__name__)
@@ -138,6 +142,51 @@ router = APIRouter()
 
 MAX_UINT32_SEED = 2**32 - 1
 profiler_router = APIRouter()
+
+
+def _load_model_chat_template_json(model: str) -> str | None:
+    """Load a model-level chat_template.json from a local path or HF cache.
+
+    Some multimodal HF repos, including Qwen3-Omni, ship the chat template as a
+    separate file instead of embedding it in tokenizer_config.json. Transformers
+    4.44+ no longer supplies a default template, so serving must pass that model
+    template explicitly when the user did not provide --chat-template.
+    """
+    candidate = Path(model) / "chat_template.json"
+    template_path: str | None = str(candidate) if candidate.is_file() else None
+
+    if template_path is None:
+        try:
+            from huggingface_hub import hf_hub_download
+
+            template_path = hf_hub_download(
+                repo_id=model,
+                filename="chat_template.json",
+                local_files_only=True,
+            )
+        except Exception:
+            return None
+
+    try:
+        with open(template_path, encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception as exc:
+        logger.warning("Failed to load chat template from %s: %s", template_path, exc)
+        return None
+
+    if isinstance(payload, dict):
+        template = payload.get("chat_template")
+    elif isinstance(payload, str):
+        template = payload
+    else:
+        template = None
+
+    if not isinstance(template, str) or not template.strip():
+        logger.warning("Ignoring malformed chat template payload in %s", template_path)
+        return None
+
+    logger.info("Loaded chat template from %s", template_path)
+    return template
 
 
 def _should_enable_profiler_endpoints(stage_configs: list | None) -> bool:
@@ -355,7 +404,7 @@ async def omni_run_server(args, **uvicorn_kwargs) -> None:
     warnings_module.filterwarnings("ignore", message=".*PydanticSerializationUnexpectedValue.*", category=UserWarning)
 
     # Add process-specific prefix to stdout and stderr.
-    decorate_logs("APIServer")
+    decorate_logs("APIServer", skip_if_decorated=True)
 
     listen_address, sock = setup_openai_server(args)
 
@@ -631,6 +680,10 @@ async def omni_init_app_state(
         )
         state.openai_streaming_speech = None
         state.openai_streaming_video = None
+        state.openai_serving_realtime_robot = ServingRealtimeRobotOpenPI.create_policy_server(
+            engine_client=engine_client,
+            model_name=model_name,
+        )
 
         state.enable_server_load_tracking = getattr(args, "enable_server_load_tracking", False)
         state.server_load_metrics = 0
@@ -646,6 +699,19 @@ async def omni_init_app_state(
 
     state.vllm_config = vllm_config
 
+    # Propagate enable_in_reasoning to the API-server process. The engine core
+    # runs in a separate process, so the contextvar that backs
+    # `get_current_vllm_config_or_none()` is None on this stack. Tool parsers
+    # call `get_enable_structured_outputs_in_reasoning()` during request
+    # handling and need to see the real flag, otherwise they silently fall
+    # back to False and mismatch the engine-side bitmask gating.
+    if vllm_config is not None:
+        from vllm.tool_parsers.structural_tag_registry import (
+            set_enable_structured_outputs_in_reasoning,
+        )
+
+        set_enable_structured_outputs_in_reasoning(vllm_config.structured_outputs_config.enable_in_reasoning)
+
     # Get supported tasks
     supported_tasks: set[str] = {"generate"}
     if hasattr(engine_client, "get_supported_tasks"):
@@ -653,6 +719,14 @@ async def omni_init_app_state(
     logger.info("Supported tasks: %s", supported_tasks)
 
     resolved_chat_template = load_chat_template(args.chat_template)
+    if resolved_chat_template is None:
+        try:
+            tokenizer = await engine_client.get_tokenizer()
+        except Exception as exc:
+            logger.debug("Could not inspect tokenizer chat_template before serving init: %s", exc)
+            tokenizer = None
+        if tokenizer is None or getattr(tokenizer, "chat_template", None) is None:
+            resolved_chat_template = _load_model_chat_template_json(args.model)
 
     if args.tool_server == "demo":
         tool_server: ToolServer | None = DemoToolServer()
@@ -948,6 +1022,7 @@ async def omni_init_app_state(
         model_name=served_model_names[0] if served_model_names else None,
         stage_configs=state.stage_configs,
     )
+    state.openai_serving_realtime_robot = None
 
     state.enable_server_load_tracking = args.enable_server_load_tracking
     state.server_load_metrics = 0
@@ -1381,22 +1456,6 @@ async def streaming_video_chat(websocket: WebSocket):
 @router.websocket("/v1/realtime")
 async def realtime_websocket(websocket: WebSocket):
     """WebSocket endpoint for OpenAI-style realtime interactions."""
-    engine_client = getattr(websocket.app.state, "engine_client", None)
-    if engine_client is not None and getattr(engine_client, "async_chunk", False):
-        await websocket.accept()
-        await websocket.send_json(
-            {
-                "type": "error",
-                "error": (
-                    "The /v1/realtime API is not supported when async_chunk is enabled on the server. "
-                    "Use a stage configuration with async_chunk disabled and restart the server before using "
-                    "this endpoint."
-                ),
-                "code": "unsupported",
-            }
-        )
-        await websocket.close()
-        return
     serving = getattr(websocket.app.state, "openai_serving_realtime", None)
     if serving is None:
         await websocket.accept()
@@ -1404,6 +1463,23 @@ async def realtime_websocket(websocket: WebSocket):
         await websocket.close()
         return
     connection = RealtimeConnection(websocket, serving)
+    await connection.handle_connection()
+
+
+@router.websocket("/v1/realtime/robot/openpi")
+async def realtime_robot_openpi(websocket: WebSocket):
+    """WebSocket endpoint for robot policy inference via OpenPI messages."""
+    from vllm_omni.entrypoints.openpi.connection import (
+        RobotRealtimeConnection,
+    )
+
+    serving = getattr(websocket.app.state, "openai_serving_realtime_robot", None)
+    if serving is None:
+        await websocket.accept()
+        await websocket.send_json({"type": "error", "error": "Robot policy not available", "code": "unsupported"})
+        await websocket.close()
+        return
+    connection = RobotRealtimeConnection(websocket, serving)
     await connection.handle_connection()
 
 
@@ -1547,6 +1623,7 @@ async def generate_images(request: ImageGenerationRequest, raw_request: Request)
                 prompt=request.prompt,
                 extra_body=extra_body,
                 request_id=f"img_gen-{random_uuid()}",
+                raw_request=raw_request,
             )
             if isinstance(generation_result, ErrorResponse):
                 return JSONResponse(
@@ -1953,6 +2030,7 @@ async def edit_images(
                 output_format=output_format,
                 output_compression=output_compression,
                 size=size_str,
+                raw_request=raw_request,
             )
             if stream and not isinstance(generation_result, ErrorResponse):
                 return StreamingResponse(
