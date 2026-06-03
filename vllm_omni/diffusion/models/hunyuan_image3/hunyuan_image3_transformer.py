@@ -1586,6 +1586,8 @@ class HunYuanSparseMoeBlock(nn.Module):
 
         # router_logits: (num_tokens, n_experts)
         router_logits, _ = self.gate(hidden_states)
+        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+            print(f"[MoE rank0] hidden_states shape: {hidden_states.shape}")
         final_hidden_states = self.experts(hidden_states=hidden_states, router_logits=router_logits)
 
         return final_hidden_states.view(orig_shape)
