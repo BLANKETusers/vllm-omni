@@ -53,7 +53,14 @@ class OmniGPUModelRunner(GPUModelRunner):
         super().__init__(*args, **kwargs)
         # vLLM skips output_token_ids when no penalties/logitsprocs exist,
         # but prefer_model_sampler models need them for stage transitions.
-        self.input_batch.logitsprocs_need_output_token_ids = True
+        # Only enable for architectures that actually use prefer_model_sampler
+        # to avoid unnecessary overhead on regular LLM models.
+        _PREFER_MODEL_SAMPLER_ARCHS = {"HunyuanImage3ForCausalMM"}
+        if any(
+            arch in _PREFER_MODEL_SAMPLER_ARCHS
+            for arch in self.model_config.architectures
+        ):
+            self.input_batch.logitsprocs_need_output_token_ids = True
         self.model_intermediate_buffer: dict[str, dict[str, Any]] = {}
         self._omni_num_scheduled_tokens_np: np.ndarray | None = None
         self._omni_last_model_output: object | None = None
