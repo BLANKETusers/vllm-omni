@@ -51,16 +51,6 @@ logger = init_logger(__name__)
 class OmniGPUModelRunner(GPUModelRunner):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # vLLM skips output_token_ids when no penalties/logitsprocs exist,
-        # but prefer_model_sampler models need them for stage transitions.
-        # Only enable for architectures that actually use prefer_model_sampler
-        # to avoid unnecessary overhead on regular LLM models.
-        _PREFER_MODEL_SAMPLER_ARCHS = {"HunyuanImage3ForCausalMM"}
-        if any(
-            arch in _PREFER_MODEL_SAMPLER_ARCHS
-            for arch in self.model_config.architectures
-        ):
-            self.input_batch.logitsprocs_need_output_token_ids = True
         self.model_intermediate_buffer: dict[str, dict[str, Any]] = {}
         self._omni_num_scheduled_tokens_np: np.ndarray | None = None
         self._omni_last_model_output: object | None = None
@@ -153,6 +143,10 @@ class OmniGPUModelRunner(GPUModelRunner):
     @instrument(span_name="Loading (GPU)")
     def load_model(self, *args, **kwargs) -> None:
         super().load_model(*args, **kwargs)
+        # vLLM skips output_token_ids when no penalties/logitsprocs exist,
+        # but prefer_model_sampler models need them for stage transitions.
+        if getattr(self.model, "prefer_model_sampler", False):
+            self.input_batch.logitsprocs_need_output_token_ids = True
         self._init_talker_mtp()
         self._prewarm_attention_capture_workspaces()
 
