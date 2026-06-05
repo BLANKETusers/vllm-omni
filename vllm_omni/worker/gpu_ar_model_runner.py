@@ -132,6 +132,12 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
         sampled_token_ids_cpu = getattr(self.input_batch, "sampled_token_ids_cpu", None)
         async_copy_ready_event = getattr(self.input_batch, "async_copy_ready_event", None)
         prev_req_id_to_index = getattr(self.input_batch, "prev_req_id_to_index", None)
+        print(f"[DEBUG _build_model_sampler] req_ids={req_ids}, req_output_token_ids_len={len(req_output_token_ids)}, "
+              f"first_req_tokens_len={len(req_output_token_ids[0]) if req_output_token_ids else 'N/A'}, "
+              f"first_req_last_token={req_output_token_ids[0][-1] if req_output_token_ids and req_output_token_ids[0] else 'empty'}, "
+              f"sampled_token_ids_cpu={sampled_token_ids_cpu is not None}, "
+              f"prev_req_id_to_index={prev_req_id_to_index is not None}, "
+              f"output_token_ids={output_token_ids}")
         if sampled_token_ids_cpu is None or not output_token_ids or prev_req_id_to_index is None:
             return output_token_ids
 
