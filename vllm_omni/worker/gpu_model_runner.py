@@ -51,6 +51,9 @@ logger = init_logger(__name__)
 class OmniGPUModelRunner(GPUModelRunner):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # vLLM skips output_token_ids when no penalties/logitsprocs exist,
+        # but prefer_model_sampler models need them for stage transitions.
+        self.input_batch.logitsprocs_need_output_token_ids = True
         self.model_intermediate_buffer: dict[str, dict[str, Any]] = {}
         self._omni_num_scheduled_tokens_np: np.ndarray | None = None
         self._omni_last_model_output: object | None = None
