@@ -70,6 +70,8 @@ class NPUARModelRunner(OmniNPUModelRunner):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        if getattr(self.model, "logitsprocs_need_output_token_ids", False):
+            self.input_batch.logitsprocs_need_output_token_ids = True
         self.input_ids = self._make_buffer(self.max_num_tokens, dtype=torch.int32)
         # each model stage has their own hidden size
         self.hidden_size = self.model_config.hf_text_config.hidden_size
