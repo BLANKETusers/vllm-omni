@@ -74,6 +74,16 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Models declaring logitsprocs_need_output_token_ids=True require
+        # output_token_ids in SamplingMetadata for stage transitions, even
+        # when no penalties/logitsprocs exist. Check via registry since
+        # self.model is not yet loaded in __init__.
+        from vllm_omni.model_executor.models.registry import OmniModelRegistry
+        model_cls, _ = OmniModelRegistry.resolve_model_cls(
+            self.model_config.architectures, self.model_config,
+        )
+        if getattr(model_cls, "logitsprocs_need_output_token_ids", False):
+            self.input_batch.logitsprocs_need_output_token_ids = True
         self.input_ids = self._make_buffer(self.max_num_tokens, dtype=torch.int32)
         # each model stage has their own hidden size
         self.hidden_size = self.model_config.hf_text_config.hidden_size

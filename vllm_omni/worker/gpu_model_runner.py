@@ -143,10 +143,6 @@ class OmniGPUModelRunner(GPUModelRunner):
     @instrument(span_name="Loading (GPU)")
     def load_model(self, *args, **kwargs) -> None:
         super().load_model(*args, **kwargs)
-        # vLLM skips output_token_ids when no penalties/logitsprocs exist,
-        # but prefer_model_sampler models need them for stage transitions.
-        if getattr(self.model, "prefer_model_sampler", False):
-            self.input_batch.logitsprocs_need_output_token_ids = True
         self._init_talker_mtp()
         self._prewarm_attention_capture_workspaces()
 
