@@ -148,8 +148,8 @@ class OmniGPUModelRunner(GPUModelRunner):
         self._prewarm_attention_capture_workspaces()
 
     def _maybe_enable_output_token_ids_for_model_sampler(self) -> None:
-      if getattr(self.model, "logitsprocs_need_output_token_ids", False):
-          self.input_batch.logitsprocs_need_output_token_ids = True
+        if getattr(self.model, "logitsprocs_need_output_token_ids", False):
+            self.input_batch.logitsprocs_need_output_token_ids = True
 
     def _init_talker_mtp(self) -> None:
         # TODO move this model specific logic to a separate class
