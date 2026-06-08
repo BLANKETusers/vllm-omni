@@ -70,7 +70,6 @@ from vllm_omni.diffusion.distributed.sp_plan import (
     SequenceParallelInput,
     SequenceParallelOutput,
 )
-from vllm_omni.diffusion.distributed.sp_sharding import sp_gather, sp_reduce_scatter
 from vllm_omni.diffusion.distributed.utils import get_local_device
 from vllm_omni.diffusion.forward_context import set_forward_context_denoise_step_idx
 from vllm_omni.diffusion.layers.norm import RMSNorm
@@ -1856,24 +1855,7 @@ class HunyuanImage3DecoderLayer(nn.Module):
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
 
-        # For MoE layers with SP: gather full sequence for better GEMM
-        # utilization, then chunk back to SP shard after computation.
-        # Skip during prefill (uncond_cfg_prefill) where the sequence
-        # is already full and SP preprocessor does not shard.
-        sp_world_size = get_sequence_parallel_world_size()
-        do_moe_sp_gather = (
-            sp_world_size > 1
-            and isinstance(self.mlp, HunYuanSparseMoeBlock)
-            and not kwargs.get("uncond_cfg_prefill", False)
-        )
-        if do_moe_sp_gather:
-            hidden_states = sp_gather(hidden_states, dim=1)
-
         hidden_states = self.mlp(hidden_states)
-
-        if do_moe_sp_gather:
-            sp_rank = get_sequence_parallel_rank()
-            hidden_states = hidden_states.chunk(sp_world_size, dim=1)[sp_rank].contiguous()
 
         hidden_states = residual + hidden_states
 
