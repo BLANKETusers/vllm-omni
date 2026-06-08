@@ -281,10 +281,10 @@ def main():
     print(f"  Prompts: {prompts}")
     print(f"{'=' * 60}\n")
 
-    omni.start_profiler();
+    omni.start_profile();
     omni_outputs = list(omni.generate(prompts=formatted_prompts, sampling_params_list=params_list))
-    omni.stop_profiler();
-    
+    omni.stop_profile();
+
     img_idx = 0
     for req_output in omni_outputs:
         ro = getattr(req_output, "request_output", None)
