@@ -101,6 +101,38 @@ def sp_gather(
     return sp_group.all_gather(tensor, dim=dim)
 
 
+def sp_reduce_scatter(
+    tensor: torch.Tensor,
+    dim: int,
+) -> torch.Tensor:
+    """Reduce-scatter along dim using the SP/ulysses group.
+
+    When TP group == SP/ulysses group, this is mathematically equivalent
+    to TP all_reduce + SP shard, but more efficient (one communication
+    round instead of two). Use after MoE forward when the MoE output is
+    unreduced (i.e., FusedMoE skips its internal TP all_reduce).
+
+    Args:
+        tensor: The unreduced full-sequence tensor to reduce-scatter.
+        dim: The dimension along which to scatter (typically dim=1 for seq).
+
+    Returns:
+        This rank's shard of the reduced output.
+    """
+    world_size = get_sequence_parallel_world_size()
+
+    if world_size == 1:
+        return tensor
+
+    sp_group = get_sp_group()
+    ulysses_pg = sp_group.ulysses_group
+    output_shape = list(tensor.shape)
+    output_shape[dim] = output_shape[dim] // world_size
+    output = torch.empty(output_shape, dtype=tensor.dtype, device=tensor.device)
+    torch.distributed.reduce_scatter(output, tensor.contiguous(), group=ulysses_pg)
+    return output
+
+
 def sp_shard_with_padding(
     tensor: torch.Tensor,
     dim: int,
