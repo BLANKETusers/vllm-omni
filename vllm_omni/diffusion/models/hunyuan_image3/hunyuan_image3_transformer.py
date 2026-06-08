@@ -1858,13 +1858,20 @@ class HunyuanImage3DecoderLayer(nn.Module):
 
         # For MoE layers with SP: gather full sequence for better GEMM
         # utilization, then chunk back to SP shard after computation.
+        # Skip during prefill (uncond_cfg_prefill) where the sequence
+        # is already full and SP preprocessor does not shard.
         sp_world_size = get_sequence_parallel_world_size()
-        if sp_world_size > 1 and isinstance(self.mlp, HunYuanSparseMoeBlock):
+        do_moe_sp_gather = (
+            sp_world_size > 1
+            and isinstance(self.mlp, HunYuanSparseMoeBlock)
+            and not kwargs.get("uncond_cfg_prefill", False)
+        )
+        if do_moe_sp_gather:
             hidden_states = sp_gather(hidden_states, dim=1)
 
         hidden_states = self.mlp(hidden_states)
 
-        if sp_world_size > 1 and isinstance(self.mlp, HunYuanSparseMoeBlock):
+        if do_moe_sp_gather:
             sp_rank = get_sequence_parallel_rank()
             hidden_states = hidden_states.chunk(sp_world_size, dim=1)[sp_rank].contiguous()
 
