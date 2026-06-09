@@ -37,12 +37,16 @@ class HunyuanFusedMoEDefault(FusedMoE):
         from vllm.distributed import get_ep_group
         ep_group = get_ep_group()
         if ep_group.world_size > 1:
+            print(f"[EP fix] Before: ep_size={self.moe_parallel_config.ep_size}, ep_rank={self.moe_parallel_config.ep_rank}; "
+                  f"After: ep_size={ep_group.world_size}, ep_rank={ep_group.rank_in_group}, "
+                  f"local_num_experts={self.expert_map_manager.local_num_experts}")
             self.moe_parallel_config.ep_size = ep_group.world_size
             self.moe_parallel_config.ep_rank = ep_group.rank_in_group
             self.expert_map_manager.update(
                 self.moe_parallel_config, self.global_num_experts
             )
             self.update_expert_map_info()
+            print(f"[EP fix] Updated local_num_experts={self.local_num_experts}")
 
         self._init_hook_handle = self.register_forward_pre_hook(self._initialize_kernel_hook, with_kwargs=True)
 
