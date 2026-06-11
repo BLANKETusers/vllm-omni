@@ -1588,7 +1588,7 @@ class HunYuanSparseMoeBlock(nn.Module):
         if torch.distributed.is_initialized():
             rank = torch.distributed.get_rank()
             probs = torch.softmax(router_logits, dim=-1)
-            topk_ids = probs.topk(self.top_k, dim=-1).indices
+            topk_ids = probs.topk(8, dim=-1).indices
             # 只打印 token[0] 的路由结果
             print(f"[MoE Router] rank={rank}, "
                   f"token0_hidden_states[:8]={hidden_states[0, :8].tolist()}, "
