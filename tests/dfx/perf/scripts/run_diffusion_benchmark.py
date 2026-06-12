@@ -855,7 +855,6 @@ def _build_omni_benchmark_args(
         "--backend", backend,
         "--endpoint", endpoint,
         "--dataset-name", dataset_name,
-        "--stream",
     ]
 
     # Build extra-body JSON from diffusion-specific params.
