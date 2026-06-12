@@ -47,13 +47,13 @@ class HunyuanFusedMoEDefault(FusedMoE):
             # When EP is active with SP (ep_size includes sp dimension), vLLM's
             # _maybe_reduce_final_output would trigger tensor_model_parallel_all_reduce
             # over the TP group (ws=2) — but this only covers 2 TP partners, not the
-            # full EP group (ws=4).  Setting is_sequence_parallel=True ensures the
+            # full EP group (ws=4).  Setting sp_size = ep_group.world_size makes
+            # is_sequence_parallel = True (property: sp_size > 1), which ensures the
             # TP all-reduce is skipped because the guard is
             # ``not self.moe_config.is_sequence_parallel``.
             # EP dispatch/combine is handled manually in forward() since vLLM's
             # do_naive_dispatch_combine requires dp_size>1, but in tp2+sp2
             # ep_size=4 while dp_size=1.
-            self.moe_parallel_config.is_sequence_parallel = True
             self.moe_parallel_config.sp_size = ep_group.world_size
             self.expert_map_manager.update(
                 self.moe_parallel_config, self.global_num_experts
