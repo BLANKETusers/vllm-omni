@@ -82,11 +82,23 @@ class HunyuanFusedMoEDefault(FusedMoE):
             # built-in path never runs.  We manually do EP all-gather here so
             # that every rank sees ALL tokens and can compute its local-expert
             # contributions for them.
-            hidden_states_all = ep_group.all_gather(hidden_states, dim=0)
-            router_logits_all = ep_group.all_gather(router_logits, dim=0)
+            # Use torch.distributed directly on ep_group.device_group (ProcessGroup)
+            # because GroupCoordinator may not expose all_gather/reduce_scatter when
+            # use_device_communicator=False.
+            ep_pg = ep_group.device_group
+
+            # all_gather hidden_states [N/sp, D] -> [N, D]
+            gathered_hs = [torch.empty_like(hidden_states) for _ in range(ep_size)]
+            torch.distributed.all_gather(gathered_hs, hidden_states, group=ep_pg)
+            hidden_states_all = torch.cat(gathered_hs, dim=0)
+
+            # all_gather router_logits [N/sp, E] -> [N, E]
+            gathered_rl = [torch.empty_like(router_logits) for _ in range(ep_size)]
+            torch.distributed.all_gather(gathered_rl, router_logits, group=ep_pg)
+            router_logits_all = torch.cat(gathered_rl, dim=0)
 
             # ---- FusedMoE compute on all-gathered tokens ----
-            # With is_sequence_parallel=True set in __init__,
+            # With is_sequence_parallel=True (sp_size=ep_size>1) set in __init__,
             # _maybe_reduce_final_output is SKIPPED (the guard is
             # ``not self.moe_config.is_sequence_parallel``, which is False).
             # _maybe_dispatch/_maybe_combine are also SKIPPED because dp_size=1.
@@ -102,7 +114,10 @@ class HunyuanFusedMoEDefault(FusedMoE):
             # (fused experts are partial — only local-expert slices — so the
             # sum reconstructs the full Σ weight·expert) and then scatters
             # each rank its original N/sp tokens.
-            result = ep_group.reduce_scatter(result, dim=0)
+            # [N, D] -> [N/sp, D]
+            output = torch.empty_like(hidden_states)
+            torch.distributed.reduce_scatter(output, result, group=ep_pg)
+            result = output
 
             # ---- Fix shared-expert over-counting ----
             # reduce_scatter sums the shared-expert output ep_size times
