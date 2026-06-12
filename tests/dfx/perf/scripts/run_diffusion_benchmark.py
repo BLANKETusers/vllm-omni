@@ -13,10 +13,11 @@ A config JSON file is REQUIRED via --test-config-file:
 
 Optional: ``--assert-baseline`` compares metrics to the ``baseline`` block in each benchmark entry (default: off).
 
-All benchmark results for a session are consolidated into a single JSON file under
-BENCHMARK_RESULT_DIR (override via the DIFFUSION_BENCHMARK_DIR environment variable).
-Each entry in the file contains the test metadata (test_name, endpoint, benchmark_params,
-timestamp) together with the raw metrics returned by the benchmark script.
+The benchmark client is ``vllm bench serve --omni``, invoked via
+``conftest.run_benchmark`` the same way as ``run_benchmark.py``.
+Diffusion-specific parameters (endpoint, task, width, height, etc.)
+are mapped to ``vllm bench serve`` arguments (backend, dataset-name,
+extra-body) before being passed to ``conftest.run_benchmark``.
 """
 
 import json
@@ -34,12 +35,73 @@ from typing import Any, cast
 import psutil
 import pytest
 
-from benchmarks.diffusion.backends import endpoint_filename_token, normalize_endpoint
+from benchmarks.diffusion.backends import normalize_endpoint
+from tests.dfx.conftest import run_benchmark as conftest_run_benchmark
 
 pytestmark = [pytest.mark.diffusion, pytest.mark.full_model]
 
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 os.environ.setdefault("DIFFUSION_ATTENTION_BACKEND", "FLASH_ATTN")
+
+# ---------------------------------------------------------------------------
+# Shared constants
+# ---------------------------------------------------------------------------
+
+# Mapping from old diffusion benchmark metric names to ``vllm bench serve --omni``
+# output keys.  The old ``diffusion_benchmark_serving.py`` used snake_case names;
+# ``vllm bench serve --omni`` uses the standard vLLM naming convention.
+_BASELINE_METRIC_MAP: dict[str, str] = {
+    "throughput_qps": "request_throughput",
+    "latency_mean": "mean_e2el_ms",
+    "latency_median": "median_e2el_ms",
+    "latency_p50": "p50_e2el_ms",
+    "latency_p95": "p95_e2el_ms",
+    "latency_p99": "p99_e2el_ms",
+}
+
+# Metrics available in the old benchmark that have no vLLM bench serve equivalent.
+# ``vllm bench serve --omni`` does not expose memory metrics or latency std dev.
+_BASELINE_METRICS_UNAVAILABLE: frozenset[str] = frozenset({
+    "peak_memory_mb_max",
+    "peak_memory_mb_mean",
+    "peak_memory_mb_median",
+    "latency_std_dev",
+})
+
+# Map old dataset name tokens (commonly ``"random"``) to ``vllm bench serve``
+# dataset identifiers (``"random-mm"`` for Omni's random multimodal dataset).
+_DATASET_NAME_MAP: dict[str, str] = {
+    "random": "random-mm",
+}
+
+_DEFAULT_DATASET_NAME = "random-mm"
+
+# Keys excluded from generic CLI pass-through in ``_build_omni_benchmark_args``
+# because they are already mapped to specific ``vllm bench serve`` arguments
+# (extra-body, endpoint, backend, etc.) or are sweep parameters handled by the
+# test runner.
+_BENCHMARK_PASSTHROUGH_EXCLUDE_KEYS: frozenset[str] = frozenset({
+    "baseline",
+    "dataset",
+    "task",
+    "name",
+    "skip-performance-assertion",
+    "width",
+    "height",
+    "num_inference_steps",
+    "num-inference-steps",
+    "negative_prompt",
+    "enable-negative-prompt",
+    "guidance_scale",
+    "seed",
+    "resolution",
+    "request_rate",
+    "max_concurrency",
+    "num_prompts",
+    "max-concurrency",
+    "request-rate",
+    "num-prompts",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -114,16 +176,10 @@ def _process_inline_fields(obj: Any, parent_key: str = "") -> None:
 _DEFAULT_RESULT_DIR = Path(__file__).parent.parent / "results"
 BENCHMARK_RESULT_DIR = Path(os.environ.get("DIFFUSION_BENCHMARK_DIR", str(_DEFAULT_RESULT_DIR)))
 
-BENCHMARK_SCRIPT = str(
-    Path(__file__).parent.parent.parent.parent.parent / "benchmarks" / "diffusion" / "diffusion_benchmark_serving.py"
-)
-
 # Single aggregated result file for the entire benchmark session.
-# Populated lazily after CONFIG_FILE_PATH is resolved.
 _SESSION_TIMESTAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
 _RESULT_LOCK = threading.Lock()
 _BRANCHPOINT_COMMIT_SHA: str | None = None
-DIFFUSION_RESULT_TEMPLATE_PATH = Path(__file__).parent / "diffusion_result_template.json"
 
 
 def _get_config_file_from_argv() -> str | None:
@@ -258,7 +314,7 @@ def _kill_process_tree(pid: int) -> None:
             except psutil.NoSuchProcess:
                 pass
 
-        gone, alive = psutil.wait_procs(children, timeout=10)
+        _, alive = psutil.wait_procs(children, timeout=10)
         for child in alive:
             try:
                 child.kill()
@@ -552,181 +608,6 @@ def benchmark_params(request, diffusion_server):
 
 
 # ---------------------------------------------------------------------------
-# Benchmark runner
-# ---------------------------------------------------------------------------
-
-
-def run_benchmark(
-    host: str,
-    port: int,
-    model: str,
-    params: dict[str, Any],
-    test_name: str,
-    endpoint: str = "/v1/chat/completions",
-    server_cfg: dict[str, Any] | None = None,
-    source_file: str = "",
-) -> dict[str, Any]:
-    """Run diffusion_benchmark_serving.py as a subprocess and return parsed metrics.
-
-    The raw metrics are written to a temporary file by the subprocess.  After
-    the run completes the metrics are merged with full metadata (test_name,
-    endpoint, benchmark_params, timestamp, flat reporting fields) and appended
-    to the session-wide aggregated JSON file (AGGREGATED_RESULT_FILE).  The
-    temporary file is removed afterwards.  Subprocess stdout/stderr are tee'd
-    to a .log file under BENCHMARK_RESULT_DIR/logs/; its path is stored in
-    the record.
-    """
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    endpoint = normalize_endpoint(endpoint)
-
-    log_dir = BENCHMARK_RESULT_DIR / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    endpoint_label = endpoint_filename_token(endpoint)
-    log_file = log_dir / f"{test_name}_{endpoint_label}_{timestamp}.log"
-
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", prefix="diffusion_bench_tmp_", delete=False) as tmp:
-        tmp_result_file = Path(tmp.name)
-
-    exclude_keys = {"baseline", "dataset", "task", "name", "skip-performance-assertion"}
-
-    cmd = [
-        sys.executable,
-        BENCHMARK_SCRIPT,
-        "--host",
-        host,
-        "--port",
-        str(port),
-        "--model",
-        model,
-        "--endpoint",
-        endpoint,
-        "--dataset",
-        params.get("dataset", "random"),
-        "--task",
-        params.get("task", "t2i"),
-        "--output-file",
-        str(tmp_result_file),
-    ]
-
-    for key, value in params.items():
-        if key in exclude_keys or value is None:
-            continue
-        flag = f"--{key}"
-        if isinstance(value, bool):
-            if value:
-                cmd.append(flag)
-        elif isinstance(value, (dict, list)):
-            cmd.extend([flag, json.dumps(value, separators=(",", ":"))])
-        else:
-            cmd.extend([flag, str(value)])
-
-    # Insert -u so the subprocess runs with unbuffered stdout/stderr, ensuring
-    # all print() output is flushed to the pipe immediately instead of being
-    # held in Python's internal block-buffer until process exit (which can
-    # cause truncated or out-of-order log output when stdout is piped).
-    cmd = [cmd[0], "-u"] + cmd[1:]
-
-    print(f"\nRunning benchmark (endpoint={endpoint}): {' '.join(cmd)}")
-    print(f"  Log file: {log_file}")
-
-    # Redirect stdout + stderr directly to the log file at the OS level
-    # (equivalent to `cmd > log 2>&1`), so no output is ever lost regardless
-    # of how the subprocess exits.  The log is echoed to the terminal afterwards.
-    with open(log_file, "w", encoding="utf-8") as log_fh:
-        log_fh.write(f"cmd: {' '.join(cmd)}\n\n")
-        log_fh.flush()
-
-        process = subprocess.Popen(
-            cmd,
-            stdout=log_fh,
-            stderr=log_fh,
-            cwd=str(Path(__file__).parent.parent.parent.parent),
-        )
-        process.wait()
-
-    with open(log_file, encoding="utf-8") as log_fh:
-        print(log_fh.read(), end="")
-
-    if process.returncode != 0:
-        tmp_result_file.unlink(missing_ok=True)
-        print(f"ERROR:Benchmark script exited with code {process.returncode}")
-
-    if not tmp_result_file.exists():
-        with open(DIFFUSION_RESULT_TEMPLATE_PATH, encoding="utf-8") as f:
-            template_payload = json.load(f)
-        # Template schema is fixed and owned by this repo:
-        # ``diffusion_result_template.json`` is a one-item list and metrics live at [0]["result"].
-        template_metrics: dict[str, Any] = template_payload[0]["result"]
-        with open(tmp_result_file, "w", encoding="utf-8") as f:
-            json.dump(template_metrics, f, ensure_ascii=False, indent=2)
-        print(f"Benchmark result file not generated, fallback to template: {tmp_result_file}")
-
-    try:
-        with open(tmp_result_file, encoding="utf-8") as f:
-            metrics: dict[str, Any] = json.load(f)
-    finally:
-        tmp_result_file.unlink(missing_ok=True)
-
-    server_cfg = server_cfg or {}
-    server_type = cast(str, server_cfg.get("server_type", "vllm-omni"))
-    serve_args_dict = server_cfg.get("serve_args_dict", {})
-    if not isinstance(serve_args_dict, dict):
-        serve_args_dict = {}
-
-    completed = metrics.get("completed_requests", metrics.get("completed", 0))
-    failed = metrics.get("failed_requests", metrics.get("failed", 0))
-
-    record: dict[str, Any] = {
-        "test_name": test_name,
-        "endpoint": endpoint,
-        "timestamp": timestamp,
-        "server_params": server_cfg.get("server_params"),
-        "benchmark_params": params,
-        "result": metrics,
-        "log_file": str(log_file),
-        "Model": model,
-        "Framework": server_type,
-        "API Endpoint": endpoint,
-        "Hardware": "",
-        "Deployment": "",
-        "Task": params.get("task", "t2i"),
-        "Dataset": params.get("dataset", "random"),
-        "resolution": _to_resolution_string(params),
-        "Parallelism": _to_parallelism_string(server_type, serve_args_dict),
-        "max_concurrency": params.get("max-concurrency", ""),
-        "Cache": _to_cache_string(server_type, serve_args_dict),
-        "Quantization": _to_quantization_value(server_type, serve_args_dict),
-        "offload": _to_offload_string(server_type, serve_args_dict),
-        "compile": _to_compile_value(server_type, serve_args_dict),
-        "Attn_backend": os.environ.get("DIFFUSION_ATTENTION_BACKEND", ""),
-        "num_inference_steps": params.get("num-inference-steps", ""),
-        "completed": completed,
-        "failed": failed,
-        "throughput_qps": metrics.get("throughput_qps"),
-        "latency_mean": metrics.get("latency_mean"),
-        "latency_median": metrics.get("latency_median"),
-        "latency_p99": metrics.get("latency_p99"),
-        "latency_p95": metrics.get("latency_p95"),
-        "latency_p50": metrics.get("latency_p50"),
-        "peak_memory_mb_max": metrics.get("peak_memory_mb_max"),
-        "peak_memory_mb_mean": metrics.get("peak_memory_mb_mean"),
-        "peak_memory_mb_median": metrics.get("peak_memory_mb_median"),
-        "stage_durations_mean": metrics.get("stage_durations_mean"),
-        "stage_durations_p50": metrics.get("stage_durations_p50"),
-        "stage_durations_p99": metrics.get("stage_durations_p99"),
-        "commit_sha": _get_branchpoint_commit_sha(),
-        "build_id": os.environ.get("BUILDKITE_BUILD_ID", ""),
-        "build_url": os.environ.get("BUILDKITE_BUILD_URL", ""),
-        "source_file": source_file,
-    }
-    _append_to_aggregated_file(record)
-    print(f"\n  Result appended to: {AGGREGATED_RESULT_FILE}")
-    print(f"  Log saved to:       {log_file}")
-
-    return metrics
-
-
-# ---------------------------------------------------------------------------
 # Assertions
 # ---------------------------------------------------------------------------
 
@@ -771,8 +652,13 @@ def assert_result(
     request_rate: Any = None,
     assert_baseline: bool = True,
 ) -> None:
-    """Assert that benchmark metrics satisfy the configured baselines."""
-    completed = result.get("completed_requests", result.get("completed", 0))
+    """Assert that benchmark metrics satisfy the configured baselines.
+
+    The *result* dict comes from ``vllm bench serve --omni`` output (via
+    ``conftest.run_benchmark``).  Metrics names follow the vLLM convention
+    (e.g. ``request_throughput``, ``mean_ttft_ms``, ``mean_e2el_ms``).
+    """
+    completed = result.get("completed", 0)
     assert completed == num_prompts, f"Expected {num_prompts} completed requests, got {completed}"
 
     if not assert_baseline:
@@ -782,8 +668,14 @@ def assert_result(
         return
 
     for metric, baseline_raw in params.get("baseline", {}).items():
-        current = result.get(metric)
-        assert current is not None, f"Metric '{metric}' not found in result: {list(result.keys())}"
+        if metric in _BASELINE_METRICS_UNAVAILABLE:
+            print(f"Warning: skipping baseline check for '{metric}' — no equivalent in vllm bench serve output")
+            continue
+        lookup_key = _BASELINE_METRIC_MAP.get(metric, metric)
+        current = result.get(lookup_key)
+        assert current is not None, (
+            f"Metric '{metric}' (lookup: '{lookup_key}') not found in result: {list(result.keys())}"
+        )
         threshold = _resolve_baseline_value(
             baseline_raw,
             sweep_index=sweep_index,
@@ -811,6 +703,15 @@ def _resolve_benchmark_endpoint(server_cfg: dict[str, Any], params: dict[str, An
     if configured:
         return normalize_endpoint(cast(str, configured))
     return _default_benchmark_endpoint_for_task(cast(str, params.get("task", "t2i")))
+
+
+def _resolve_benchmark_backend(endpoint: str) -> str:
+    """Map endpoint to ``vllm bench serve --omni`` backend name."""
+    if endpoint == "/v1/images/edits":
+        return "openai-image-edits-omni"
+    # /v1/chat/completions and /v1/videos both use openai-chat-omni
+    # (video tasks use SSE streaming on the chat completions endpoint).
+    return "openai-chat-omni"
 
 
 def _to_list(value: Any) -> list[Any]:
@@ -919,6 +820,169 @@ def _iter_sweep_runs(params: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Benchmark args builder  (maps diffusion params to vllm bench serve --omni)
+# ---------------------------------------------------------------------------
+
+
+def _resolve_dataset_name(params: dict[str, Any]) -> str:
+    """Resolve the ``--dataset-name`` value for ``vllm bench serve``."""
+    dataset_raw = params.get("dataset", _DEFAULT_DATASET_NAME)
+    return _DATASET_NAME_MAP.get(cast(str, dataset_raw), cast(str, dataset_raw))
+
+
+def _build_omni_benchmark_args(
+    host: str,
+    port: int,
+    model: str,
+    endpoint: str,
+    backend: str,
+    params: dict[str, Any],
+) -> list[str]:
+    """Build the CLI argument list for ``vllm bench serve --omni``.
+
+    Diffusion-specific parameters (task, dataset, width, height, etc.)
+    are mapped to their ``vllm bench serve`` equivalents:
+      - ``--task``     → ``--backend`` + ``--endpoint``
+      - ``--dataset``  → ``--dataset-name`` (via :func:`_resolve_dataset_name`)
+      - ``--width/--height/--num-inference-steps`` → ``--extra-body`` JSON
+    """
+    dataset_name = _resolve_dataset_name(params)
+
+    args = [
+        "--host", host,
+        "--port", str(port),
+        "--model", model,
+        "--backend", backend,
+        "--endpoint", endpoint,
+        "--dataset-name", dataset_name,
+        "--stream",
+    ]
+
+    # Build extra-body JSON from diffusion-specific params.
+    extra_body: dict[str, Any] = {}
+
+    # Modality: always request image output for t2i tasks.
+    task = params.get("task", "t2i")
+    modalities = ["text", "image"] if task in {"t2i", "i2i", "ti2i", "it2i"} else ["text"]
+    extra_body["modalities"] = modalities
+
+    # Map diffusion-specific params into extra-body.
+    extra_body_keys = {
+        "width",
+        "height",
+        "num_inference_steps",
+        "negative_prompt",
+        "guidance_scale",
+        "seed",
+        "resolution",
+    }
+    for key in extra_body_keys:
+        # params may use hyphenated or underscore forms
+        value = params.get(key) or params.get(key.replace("_", "-"))
+        if value is not None:
+            extra_body[key] = value
+
+    # Request stage metrics from the server.
+    extra_body["request_stage_metrics"] = True
+
+    if extra_body:
+        args.extend(["--extra-body", json.dumps(extra_body, separators=(",", ":"))])
+
+    # Pass through any remaining params that vllm bench serve understands directly.
+    for key, value in params.items():
+        if key in _BENCHMARK_PASSTHROUGH_EXCLUDE_KEYS or value is None:
+            continue
+        arg_name = f"--{key.replace('_', '-')}"
+        if isinstance(value, bool) and value:
+            args.append(arg_name)
+        elif isinstance(value, dict):
+            args.extend([arg_name, json.dumps(value, ensure_ascii=False, separators=(",", ":"))])
+        elif isinstance(value, list):
+            args.extend([arg_name, json.dumps(value, ensure_ascii=False, separators=(",", ":"))])
+        elif not isinstance(value, bool):
+            args.extend([arg_name, str(value)])
+
+    return args
+
+
+# ---------------------------------------------------------------------------
+# Result record builder
+# ---------------------------------------------------------------------------
+
+
+def _build_result_record(
+    *,
+    test_name: str,
+    endpoint: str,
+    backend: str,
+    diffusion_server: Any,
+    server_cfg: dict[str, Any],
+    sweep_run: dict[str, Any],
+    result: dict[str, Any],
+    dataset_name: str,
+) -> dict[str, Any]:
+    """Build the aggregated result record for a single benchmark sweep step."""
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    server_type = cast(str, (server_cfg or {}).get("server_type", "vllm-omni"))
+    serve_args_dict = (server_cfg or {}).get("serve_args_dict", {})
+    if not isinstance(serve_args_dict, dict):
+        serve_args_dict = {}
+
+    params = sweep_run["params"]
+    completed = result.get("completed", 0)
+    failed = result.get("failed", 0)
+    max_concurrency = sweep_run["max_concurrency"]
+
+    # Flat metric fields written by vllm bench serve --omni.
+    flat_metric_keys = (
+        "request_throughput",
+        "mean_ttft_ms",
+        "mean_tpot_ms",
+        "mean_e2el_ms",
+        "mean_itl_ms",
+        "image_generation_time_ms",
+        "image_pixels",
+        "denoise_step_latency_ms",
+    )
+
+    record: dict[str, Any] = {
+        "test_name": test_name,
+        "endpoint": endpoint,
+        "backend": backend,
+        "timestamp": timestamp,
+        "server_params": (server_cfg or {}).get("server_params"),
+        "benchmark_params": params,
+        "result": result,
+        "Model": diffusion_server.model,
+        "Framework": server_type,
+        "API Endpoint": endpoint,
+        "Hardware": "",
+        "Deployment": "",
+        "Task": params.get("task", "t2i"),
+        "Dataset": dataset_name,
+        "resolution": _to_resolution_string(params),
+        "Parallelism": _to_parallelism_string(server_type, serve_args_dict),
+        "max_concurrency": max_concurrency if max_concurrency is not None else "",
+        "Cache": _to_cache_string(server_type, serve_args_dict),
+        "Quantization": _to_quantization_value(server_type, serve_args_dict),
+        "offload": _to_offload_string(server_type, serve_args_dict),
+        "compile": _to_compile_value(server_type, serve_args_dict),
+        "Attn_backend": os.environ.get("DIFFUSION_ATTENTION_BACKEND", ""),
+        "num_inference_steps": params.get("num-inference-steps", params.get("num_inference_steps", "")),
+        "completed": completed,
+        "failed": failed,
+        "commit_sha": _get_branchpoint_commit_sha(),
+        "build_id": os.environ.get("BUILDKITE_BUILD_ID", ""),
+        "build_url": os.environ.get("BUILDKITE_BUILD_URL", ""),
+        "source_file": cast(str, CONFIG_FILE_PATH),
+    }
+    for key in flat_metric_keys:
+        record[key] = result.get(key)
+
+    return record
+
+
+# ---------------------------------------------------------------------------
 # Test entry point
 # ---------------------------------------------------------------------------
 @pytest.mark.benchmark
@@ -934,9 +998,14 @@ def test_diffusion_performance_benchmark(diffusion_server, benchmark_params, req
 
     One server is started per unique parallel configuration (module scope).
     For each server, all benchmark parameter sets defined in the config JSON
-    are executed sequentially; metrics are recorded to the aggregated result file.
+    are executed sequentially.
 
-    Pass ``--assert-baseline`` to compare ``throughput_qps``, ``latency_mean``, etc. to the JSON ``baseline`` block.
+    The benchmark client is ``vllm bench serve --omni``, invoked via
+    ``conftest.run_benchmark`` the same way as ``run_benchmark.py``.
+    Diffusion-specific parameters are mapped to ``vllm bench serve``
+    arguments before being passed to ``conftest.run_benchmark``.
+
+    Pass ``--assert-baseline`` to compare metrics to the JSON ``baseline`` block.
     """
     test_name = benchmark_params["test_name"]
     params = benchmark_params["params"]
@@ -945,33 +1014,69 @@ def test_diffusion_performance_benchmark(diffusion_server, benchmark_params, req
 
     for sweep_run in sweep_runs:
         endpoint = _resolve_benchmark_endpoint(server_cfg, sweep_run["params"])
-        result = run_benchmark(
+        backend = _resolve_benchmark_backend(endpoint)
+
+        # Build args for vllm bench serve --omni
+        args = _build_omni_benchmark_args(
             host=diffusion_server.host,
             port=diffusion_server.port,
             model=diffusion_server.model,
-            params=sweep_run["params"],
-            test_name=test_name,
             endpoint=endpoint,
-            server_cfg=server_cfg,
-            source_file=cast(str, CONFIG_FILE_PATH),
+            backend=backend,
+            params=sweep_run["params"],
         )
 
+        # Determine the flow label (request_rate or max_concurrency)
+        flow = sweep_run["request_rate"] if sweep_run["request_rate"] is not None else sweep_run["max_concurrency"]
+
+        # Append sweep-specific params to args
+        if sweep_run["request_rate"] is not None:
+            args += ["--request-rate", str(sweep_run["request_rate"]), "--num-prompts", str(sweep_run["num_prompts"])]
+        else:
+            args += ["--max-concurrency", str(sweep_run["max_concurrency"]), "--num-prompts", str(sweep_run["num_prompts"]), "--request-rate", "inf"]
+
+        # Call conftest.run_benchmark — same way as run_benchmark.py
+        result = conftest_run_benchmark(
+            args=args,
+            test_name=test_name,
+            flow=flow,
+            dataset_name=sweep_run["params"].get("dataset", "random"),
+            num_prompt=sweep_run["num_prompts"],
+            baseline_config=sweep_run["params"].get("baseline"),
+            sweep_index=sweep_run["sweep_index"],
+            request_rate=sweep_run["request_rate"],
+            max_concurrency=sweep_run["max_concurrency"],
+        )
+
+        # Build aggregated record with rich metadata.
+        record = _build_result_record(
+            test_name=test_name,
+            endpoint=endpoint,
+            backend=backend,
+            diffusion_server=diffusion_server,
+            server_cfg=server_cfg,
+            sweep_run=sweep_run,
+            result=result,
+            dataset_name=_resolve_dataset_name(sweep_run["params"]),
+        )
+        _append_to_aggregated_file(record)
+        print(f"\n  Result appended to: {AGGREGATED_RESULT_FILE}")
+
         print(f"\n{'=' * 60}")
-        print(f"Results for {test_name} (server={diffusion_server.server_type}, endpoint={endpoint}):")
+        print(f"Results for {test_name} (server={diffusion_server.server_type}, endpoint={endpoint}, backend={backend}):")
         for key in (
-            "throughput_qps",
-            "latency_mean",
-            "latency_median",
-            "latency_p50",
-            "latency_p99",
-            "peak_memory_mb_max",
-            "peak_memory_mb_mean",
-            "peak_memory_mb_median",
+            "request_throughput",
+            "mean_ttft_ms",
+            "mean_tpot_ms",
+            "mean_e2el_ms",
+            "mean_itl_ms",
+            "image_generation_time_ms",
+            "image_pixels",
+            "denoise_step_latency_ms",
         ):
             if key in result:
                 print(f"  {key}: {result[key]:.4f}")
 
-        print(f"\n  Aggregated results: {AGGREGATED_RESULT_FILE}")
         print("=" * 60)
 
         assert_baseline = request.config.getoption("--assert-baseline", default=False)
