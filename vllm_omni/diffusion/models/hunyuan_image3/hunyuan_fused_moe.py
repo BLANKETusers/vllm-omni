@@ -44,12 +44,24 @@ class HunyuanFusedMoEDefault(FusedMoE):
                       f"local_num_experts={self.expert_map_manager.local_num_experts}")
             self.moe_parallel_config.ep_size = ep_group.world_size
             self.moe_parallel_config.ep_rank = ep_group.rank_in_group
+            # When EP is active with SP (ep_size includes sp dimension), vLLM's
+            # _maybe_reduce_final_output would trigger tensor_model_parallel_all_reduce
+            # over the TP group (ws=2) — but this only covers 2 TP partners, not the
+            # full EP group (ws=4).  Setting is_sequence_parallel=True ensures the
+            # TP all-reduce is skipped because the guard is
+            # ``not self.moe_config.is_sequence_parallel``.
+            # EP dispatch/combine is handled manually in forward() since vLLM's
+            # do_naive_dispatch_combine requires dp_size>1, but in tp2+sp2
+            # ep_size=4 while dp_size=1.
+            self.moe_parallel_config.is_sequence_parallel = True
+            self.moe_parallel_config.sp_size = ep_group.world_size
             self.expert_map_manager.update(
                 self.moe_parallel_config, self.global_num_experts
             )
             self.update_expert_map_info()
             if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
-                print(f"[EP fix] Updated local_num_experts={self.local_num_experts}")
+                print(f"[EP fix] Updated local_num_experts={self.local_num_experts}, "
+                      f"is_sequence_parallel=True, sp_size={self.moe_parallel_config.sp_size}")
 
         self._init_hook_handle = self.register_forward_pre_hook(self._initialize_kernel_hook, with_kwargs=True)
 
@@ -59,8 +71,56 @@ class HunyuanFusedMoEDefault(FusedMoE):
         self._init_hook_handle.remove()
 
     def forward(self, hidden_states: Any, router_logits: Any) -> Any:
+        from vllm.distributed import get_ep_group
+        ep_group = get_ep_group()
+        ep_size = ep_group.world_size
+
+        if ep_size > 1:
+            # ---- EP dispatch: all-gather across the full EP group ----
+            # vLLM's built-in do_naive_dispatch_combine only fires when dp_size>1,
+            # but in omni's tp2+sp2 layout ep_size=4 while dp_size=1, so the
+            # built-in path never runs.  We manually do EP all-gather here so
+            # that every rank sees ALL tokens and can compute its local-expert
+            # contributions for them.
+            hidden_states_all = ep_group.all_gather(hidden_states, dim=0)
+            router_logits_all = ep_group.all_gather(router_logits, dim=0)
+
+            # ---- FusedMoE compute on all-gathered tokens ----
+            # With is_sequence_parallel=True set in __init__,
+            # _maybe_reduce_final_output is SKIPPED (the guard is
+            # ``not self.moe_config.is_sequence_parallel``, which is False).
+            # _maybe_dispatch/_maybe_combine are also SKIPPED because dp_size=1.
+            # This means super().forward() only does the local expert +
+            # shared-expert kernel — exactly what we want.
+            _set_forward_context_num_tokens(hidden_states_all.shape[0])
+            result = super(HunyuanFusedMoEDefault, self).forward(
+                hidden_states_all, router_logits_all
+            )
+
+            # ---- EP combine: reduce-scatter across the full EP group ----
+            # reduce_scatter sums each token's contributions from all EP ranks
+            # (fused experts are partial — only local-expert slices — so the
+            # sum reconstructs the full Σ weight·expert) and then scatters
+            # each rank its original N/sp tokens.
+            result = ep_group.reduce_scatter(result, dim=0)
+
+            # ---- Fix shared-expert over-counting ----
+            # reduce_scatter sums the shared-expert output ep_size times
+            # (every rank computes the same shared-expert value because the
+            # input is identical after all-gather), but the correct result
+            # should include it only once.  Subtract (ep_size - 1) × shared_out
+            # to compensate.
+            if self.shared_experts is not None:
+                shared_out = self.shared_experts._layer(hidden_states)
+                result = result - (ep_size - 1) * shared_out
+
+            return result
+
+        # No EP: standard FusedMoE forward
         _set_forward_context_num_tokens(hidden_states.shape[0])
-        return super().forward(hidden_states, router_logits)
+        return super(HunyuanFusedMoEDefault, self).forward(
+            hidden_states, router_logits
+        )
 
 
 class HunyuanFusedMoE:
