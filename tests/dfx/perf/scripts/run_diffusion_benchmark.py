@@ -86,6 +86,8 @@ _BENCHMARK_PASSTHROUGH_EXCLUDE_KEYS: frozenset[str] = frozenset({
     "task",
     "name",
     "skip-performance-assertion",
+    "bot-task",
+    "bot_task",
     "width",
     "height",
     "num_inference_steps",
@@ -874,6 +876,7 @@ def _build_omni_benchmark_args(
         "guidance_scale",
         "seed",
         "resolution",
+        "bot_task",
     }
     for key in extra_body_keys:
         # params may use hyphenated or underscore forms
