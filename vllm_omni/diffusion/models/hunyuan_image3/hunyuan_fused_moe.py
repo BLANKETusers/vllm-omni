@@ -125,7 +125,7 @@ class HunyuanFusedMoEDefault(FusedMoE):
             # each rank its original N/sp tokens.
             # [N, D] -> [N/sp, D]
             output = torch.empty_like(hidden_states)
-            torch.distributed.reduce_scatter(output, result, group=ep_pg)
+            torch.distributed.reduce_scatter_tensor(output, result, group=ep_pg)
             result = output
 
             # ---- Fix shared-expert over-counting ----
