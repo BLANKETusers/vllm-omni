@@ -43,7 +43,7 @@ class HunyuanFusedMoEDefault(FusedMoE):
 
     def forward(self, hidden_states: Any, router_logits: Any) -> Any:
         HunyuanFusedMoEDefault._global_debug_count += 1
-        if HunyuanFusedMoEDefault._global_debug_count in (1, 2) and not torch.compiler.is_compiling():
+        if HunyuanFusedMoEDefault._global_debug_count in (1, 33) and not torch.compiler.is_compiling():
             import torch.distributed as dist
             rank = dist.get_rank() if dist.is_initialized() else -1
             print(f"[MoE Token] rank={rank}, call={HunyuanFusedMoEDefault._global_debug_count}, hs_in={hidden_states.shape[0]}, "
