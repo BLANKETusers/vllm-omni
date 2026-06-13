@@ -64,7 +64,7 @@ class HunyuanFusedMoEDefault(FusedMoE):
                       f"is_sequence_parallel=True, sp_size={self.moe_parallel_config.sp_size}")
 
         self._init_hook_handle = self.register_forward_pre_hook(self._initialize_kernel_hook, with_kwargs=True)
-        self._debug_call_count = 0  # limit per-step debug prints
+        self._debug_call_count = 0
 
     def _initialize_kernel_hook(self, module: Any, args: Any, kwargs: Any) -> None:
         if self.quant_method and getattr(self.quant_method, "moe_kernel", None) is None:
@@ -72,68 +72,62 @@ class HunyuanFusedMoEDefault(FusedMoE):
         self._init_hook_handle.remove()
 
     def forward(self, hidden_states: Any, router_logits: Any) -> Any:
-        from vllm.distributed import get_ep_group
+        from vllm.distributed import get_ep_group, get_sp_group
         ep_group = get_ep_group()
         ep_size = ep_group.world_size
 
         if ep_size > 1:
+            sp_group = get_sp_group()
+            sp_size = sp_group.world_size if sp_group is not None else 1
+            tp_in_ep = ep_size // sp_size  # TP replication factor within EP
+
+            ep_pg = ep_group.device_group
+
             # ---- EP dispatch: all-gather across the full EP group ----
             # vLLM's built-in do_naive_dispatch_combine only fires when dp_size>1,
             # but in omni's tp2+sp2 layout ep_size=4 while dp_size=1, so the
-            # built-in path never runs.  We manually do EP all-gather here so
-            # that every rank sees ALL tokens and can compute its local-expert
-            # contributions for them.
-            # Use torch.distributed directly on ep_group.device_group (ProcessGroup)
-            # because GroupCoordinator may not expose all_gather/reduce_scatter when
-            # use_device_communicator=False.
-            ep_pg = ep_group.device_group
-
-            # all_gather hidden_states [N/sp, D] -> [N, D]
+            # built-in path never runs.
             gathered_hs = [torch.empty_like(hidden_states) for _ in range(ep_size)]
             torch.distributed.all_gather(gathered_hs, hidden_states, group=ep_pg)
-            hidden_states_all = torch.cat(gathered_hs, dim=0)
 
-            # all_gather router_logits [N/sp, E] -> [N, E]
             gathered_rl = [torch.empty_like(router_logits) for _ in range(ep_size)]
             torch.distributed.all_gather(gathered_rl, router_logits, group=ep_pg)
-            router_logits_all = torch.cat(gathered_rl, dim=0)
 
-            # ---- FusedMoE compute on all-gathered tokens ----
-            # With is_sequence_parallel=True (sp_size=ep_size>1) set in __init__,
-            # _maybe_reduce_final_output is SKIPPED (the guard is
-            # ``not self.moe_config.is_sequence_parallel``, which is False).
-            # _maybe_dispatch/_maybe_combine are also SKIPPED because dp_size=1.
-            # This means super().forward() only does the local expert +
-            # shared-expert kernel — exactly what we want.
+            # Only use first sp_size unique token chunks (skip TP duplicates).
+            # Within EP, ranks are ordered [tp, sp]: gathered_hs has sp_size
+            # unique token sets, each replicated tp_in_ep times.
+            unique_hs = torch.cat(gathered_hs[:sp_size], dim=0)
+            unique_rl = torch.cat(gathered_rl[:sp_size], dim=0)
+
+            # Verify: print once per rank on first call (hidden inside compile guard).
             self._debug_call_count += 1
-            if self._debug_call_count <= 3:
-                rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else -1
-                print(f"[MoE GEMM Debug] call={self._debug_call_count} rank={rank}, "
-                      f"hs_in.shape={hidden_states.shape}, hs_in.stride={hidden_states.stride()}, "
-                      f"hs_all.shape={hidden_states_all.shape}, hs_all.stride={hidden_states_all.stride()}, "
-                      f"hs_all.is_contiguous={hidden_states_all.is_contiguous()}, "
-                      f"local_num_experts={self.local_num_experts}, global_num_experts={self.global_num_experts}")
-            _set_forward_context_num_tokens(hidden_states_all.shape[0])
+            if self._debug_call_count <= 1 and not torch.compiler.is_compiling():
+                print(f"[MoE Opt] rank={torch.distributed.get_rank()}, "
+                      f"ep_size={ep_size}, sp_size={sp_size}, tp_in_ep={tp_in_ep}, "
+                      f"hs_in={hidden_states.shape[0]}, hs_unique={unique_hs.shape[0]}, "
+                      f"ratio={unique_hs.shape[0] / hidden_states.shape[0]:.1f}x, "
+                      f"local_experts={self.local_num_experts}")
+
+            # ---- FusedMoE compute on unique tokens ----
+            # Each rank computes only its local experts (16 of 64).
+            # is_sequence_parallel=True skips _maybe_reduce_final_output
+            # (TP all-reduce, which only covers 2 ranks instead of 4).
+            _set_forward_context_num_tokens(unique_hs.shape[0])
             result = super(HunyuanFusedMoEDefault, self).forward(
-                hidden_states_all, router_logits_all
+                unique_hs, unique_rl
             )
 
-            # ---- EP combine: reduce-scatter across the full EP group ----
-            # reduce_scatter sums each token's contributions from all EP ranks
-            # (fused experts are partial — only local-expert slices — so the
-            # sum reconstructs the full Σ weight·expert) and then scatters
-            # each rank its original N/sp tokens.
-            # [N, D] -> [N/sp, D]
-            output = torch.empty_like(hidden_states)
-            torch.distributed.reduce_scatter_tensor(output, result, group=ep_pg)
-            result = output
+            # ---- EP combine: all-reduce + SP slice + shared-expert fix ----
+            # all_reduce across EP group combines all 64 experts' contributions
+            # (each rank contributes 16 local experts on the same unique tokens).
+            torch.distributed.all_reduce(result, group=ep_pg)
 
-            # ---- Fix shared-expert over-counting ----
-            # reduce_scatter sums the shared-expert output ep_size times
-            # (every rank computes the same shared-expert value because the
-            # input is identical after all-gather), but the correct result
-            # should include it only once.  Subtract (ep_size - 1) × shared_out
-            # to compensate.
+            # Keep only this rank's SP portion.
+            local_N = hidden_states.shape[0]
+            my_sp_idx = ep_group.rank_in_group // tp_in_ep
+            result = result[my_sp_idx * local_N : (my_sp_idx + 1) * local_N]
+
+            # Shared expert was all-reduced ep_size times; keep only one copy.
             if self.shared_experts is not None:
                 shared_out = self.shared_experts._layer(hidden_states)
                 result = result - (ep_size - 1) * shared_out

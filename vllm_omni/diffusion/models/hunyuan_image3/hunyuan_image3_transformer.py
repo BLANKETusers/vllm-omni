@@ -1587,15 +1587,15 @@ class HunYuanSparseMoeBlock(nn.Module):
         # router_logits: (num_tokens, n_experts)
         router_logits, _ = self.gate(hidden_states)
         self._router_debug_call_count += 1
-        if torch.distributed.is_initialized() and self._router_debug_call_count <= 3:
-            rank = torch.distributed.get_rank()
-            probs = torch.softmax(router_logits, dim=-1)
-            topk_ids = probs.topk(8, dim=-1).indices
-            # 只打印 token[0] 的路由结果
-            print(f"[MoE Router] rank={rank}, call={self._router_debug_call_count}, "
-                  f"token0_hidden_states[:8]={hidden_states[0, :8].tolist()}, "
-                  f"token0_router_logits[:8]={router_logits[0, :8].tolist()}, "
-                  f"token0_topk={topk_ids[0].tolist()}")
+        if self._router_debug_call_count <= 3 and not torch.compiler.is_compiling():
+            if torch.distributed.is_initialized():
+                rank = torch.distributed.get_rank()
+                probs = torch.softmax(router_logits, dim=-1)
+                topk_ids = probs.topk(8, dim=-1).indices
+                print(f"[MoE Router] rank={rank}, call={self._router_debug_call_count}, "
+                      f"token0_hidden_states[:8]={hidden_states[0, :8].tolist()}, "
+                      f"token0_router_logits[:8]={router_logits[0, :8].tolist()}, "
+                      f"token0_topk={topk_ids[0].tolist()}")
         final_hidden_states = self.experts(hidden_states=hidden_states, router_logits=router_logits)
 
         return final_hidden_states.view(orig_shape)
