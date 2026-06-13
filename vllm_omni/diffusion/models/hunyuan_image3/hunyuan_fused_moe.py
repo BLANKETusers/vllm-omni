@@ -72,7 +72,8 @@ class HunyuanFusedMoEDefault(FusedMoE):
         self._init_hook_handle.remove()
 
     def forward(self, hidden_states: Any, router_logits: Any) -> Any:
-        from vllm.distributed import get_ep_group, get_sp_group
+        from vllm.distributed import get_ep_group
+        from vllm_omni.diffusion.distributed.parallel_state import get_sp_group
         ep_group = get_ep_group()
         ep_size = ep_group.world_size
 
