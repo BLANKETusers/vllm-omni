@@ -3,6 +3,7 @@
 
 from typing import Any
 
+import torch
 import vllm.forward_context as _vllm_fc
 from vllm.model_executor.layers.fused_moe import FusedMoE
 from vllm.utils.import_utils import resolve_obj_by_qualname
@@ -32,6 +33,7 @@ class HunyuanFusedMoEDefault(FusedMoE):
         super().__init__(prefix=prefix, **kwargs)
         self._prefix = prefix
         self._init_hook_handle = self.register_forward_pre_hook(self._initialize_kernel_hook, with_kwargs=True)
+        self._debug_token_count = 0
 
     def _initialize_kernel_hook(self, module: Any, args: Any, kwargs: Any) -> None:
         if self.quant_method and getattr(self.quant_method, "moe_kernel", None) is None:
@@ -39,6 +41,14 @@ class HunyuanFusedMoEDefault(FusedMoE):
         self._init_hook_handle.remove()
 
     def forward(self, hidden_states: Any, router_logits: Any) -> Any:
+        self._debug_token_count += 1
+        if self._debug_token_count == 1 and not torch.compiler.is_compiling():
+            import torch.distributed as dist
+            rank = dist.get_rank() if dist.is_initialized() else -1
+            print(f"[MoE Token] rank={rank}, hs_in={hidden_states.shape[0]}, "
+                  f"local_experts={self.local_num_experts}, "
+                  f"global_experts={self.global_num_experts}, "
+                  f"ep_size={self.moe_parallel_config.ep_size}")
         _set_forward_context_num_tokens(hidden_states.shape[0])
         return super(HunyuanFusedMoEDefault, self).forward(
             hidden_states, router_logits
