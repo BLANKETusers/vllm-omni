@@ -27,13 +27,14 @@ def _set_forward_context_num_tokens(num_tokens: int) -> None:
 
 
 class HunyuanFusedMoEDefault(FusedMoE):
+    _global_debug_count = 0  # module-level, shared across all MoE layers
+
     def __init__(self, *, prefix: str = "", **kwargs: Any) -> None:
         # Current vLLM FusedMoE handles output reduction internally.
         kwargs.pop("reduce_results", None)
         super().__init__(prefix=prefix, **kwargs)
         self._prefix = prefix
         self._init_hook_handle = self.register_forward_pre_hook(self._initialize_kernel_hook, with_kwargs=True)
-        self._debug_token_count = 0
 
     def _initialize_kernel_hook(self, module: Any, args: Any, kwargs: Any) -> None:
         if self.quant_method and getattr(self.quant_method, "moe_kernel", None) is None:
@@ -41,8 +42,8 @@ class HunyuanFusedMoEDefault(FusedMoE):
         self._init_hook_handle.remove()
 
     def forward(self, hidden_states: Any, router_logits: Any) -> Any:
-        self._debug_token_count += 1
-        if self._debug_token_count == 1 and not torch.compiler.is_compiling():
+        HunyuanFusedMoEDefault._global_debug_count += 1
+        if HunyuanFusedMoEDefault._global_debug_count == 1 and not torch.compiler.is_compiling():
             import torch.distributed as dist
             rank = dist.get_rank() if dist.is_initialized() else -1
             print(f"[MoE Token] rank={rank}, hs_in={hidden_states.shape[0]}, "
