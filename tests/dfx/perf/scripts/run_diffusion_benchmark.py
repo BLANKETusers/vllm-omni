@@ -61,12 +61,14 @@ _BASELINE_METRIC_MAP: dict[str, str] = {
 
 # Metrics available in the old benchmark that have no vLLM bench serve equivalent.
 # ``vllm bench serve --omni`` does not expose memory metrics or latency std dev.
-_BASELINE_METRICS_UNAVAILABLE: frozenset[str] = frozenset({
-    "peak_memory_mb_max",
-    "peak_memory_mb_mean",
-    "peak_memory_mb_median",
-    "latency_std_dev",
-})
+_BASELINE_METRICS_UNAVAILABLE: frozenset[str] = frozenset(
+    {
+        "peak_memory_mb_max",
+        "peak_memory_mb_mean",
+        "peak_memory_mb_median",
+        "latency_std_dev",
+    }
+)
 
 # Map old dataset name tokens (commonly ``"random"``) to ``vllm bench serve``
 # dataset identifiers (``"random-mm"`` for Omni's random multimodal dataset).
@@ -80,30 +82,32 @@ _DEFAULT_DATASET_NAME = "random-mm"
 # because they are already mapped to specific ``vllm bench serve`` arguments
 # (extra-body, endpoint, backend, etc.) or are sweep parameters handled by the
 # test runner.
-_BENCHMARK_PASSTHROUGH_EXCLUDE_KEYS: frozenset[str] = frozenset({
-    "baseline",
-    "dataset",
-    "task",
-    "name",
-    "skip-performance-assertion",
-    "bot-task",
-    "bot_task",
-    "width",
-    "height",
-    "num_inference_steps",
-    "num-inference-steps",
-    "negative_prompt",
-    "enable-negative-prompt",
-    "guidance_scale",
-    "seed",
-    "resolution",
-    "request_rate",
-    "max_concurrency",
-    "num_prompts",
-    "max-concurrency",
-    "request-rate",
-    "num-prompts",
-})
+_BENCHMARK_PASSTHROUGH_EXCLUDE_KEYS: frozenset[str] = frozenset(
+    {
+        "baseline",
+        "dataset",
+        "task",
+        "name",
+        "skip-performance-assertion",
+        "bot-task",
+        "bot_task",
+        "width",
+        "height",
+        "num_inference_steps",
+        "num-inference-steps",
+        "negative_prompt",
+        "enable-negative-prompt",
+        "guidance_scale",
+        "seed",
+        "resolution",
+        "request_rate",
+        "max_concurrency",
+        "num_prompts",
+        "max-concurrency",
+        "request-rate",
+        "num-prompts",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -851,12 +855,18 @@ def _build_omni_benchmark_args(
     dataset_name = _resolve_dataset_name(params)
 
     args = [
-        "--host", host,
-        "--port", str(port),
-        "--model", model,
-        "--backend", backend,
-        "--endpoint", endpoint,
-        "--dataset-name", dataset_name,
+        "--host",
+        host,
+        "--port",
+        str(port),
+        "--model",
+        model,
+        "--backend",
+        backend,
+        "--endpoint",
+        endpoint,
+        "--dataset-name",
+        dataset_name,
         "--skip-chat-template",
     ]
 
@@ -1036,7 +1046,14 @@ def test_diffusion_performance_benchmark(diffusion_server, benchmark_params, req
         if sweep_run["request_rate"] is not None:
             args += ["--request-rate", str(sweep_run["request_rate"]), "--num-prompts", str(sweep_run["num_prompts"])]
         else:
-            args += ["--max-concurrency", str(sweep_run["max_concurrency"]), "--num-prompts", str(sweep_run["num_prompts"]), "--request-rate", "inf"]
+            args += [
+                "--max-concurrency",
+                str(sweep_run["max_concurrency"]),
+                "--num-prompts",
+                str(sweep_run["num_prompts"]),
+                "--request-rate",
+                "inf",
+            ]
 
         # Call conftest.run_benchmark — same way as run_benchmark.py
         result = conftest_run_benchmark(
@@ -1066,7 +1083,9 @@ def test_diffusion_performance_benchmark(diffusion_server, benchmark_params, req
         print(f"\n  Result appended to: {AGGREGATED_RESULT_FILE}")
 
         print(f"\n{'=' * 60}")
-        print(f"Results for {test_name} (server={diffusion_server.server_type}, endpoint={endpoint}, backend={backend}):")
+        print(
+            f"Results for {test_name} (server={diffusion_server.server_type}, endpoint={endpoint}, backend={backend}):"
+        )
         for key in (
             "request_throughput",
             "mean_ttft_ms",
