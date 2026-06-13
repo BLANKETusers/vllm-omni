@@ -1280,12 +1280,14 @@ class HunyuanImage3Pipeline(
         assert inputs_embeds is not None
         bsz, seq_len, n_embd = inputs_embeds.shape
 
-        # Debug: print total seq_len before model forward (before SP scatter)
-        if not torch.compiler.is_compiling():
-            import torch.distributed as dist
-            rank = dist.get_rank() if dist.is_initialized() else -1
-            print(f"[Pipeline Debug] rank={rank}, first_step={first_step}, "
-                  f"seq_len={seq_len}, bsz={bsz}, mode={mode}")
+        # Debug: print total seq_len once per rank (before SP scatter)
+        if not hasattr(self, '_pipeline_debug_done'):
+            self._pipeline_debug_done = True
+            if not torch.compiler.is_compiling():
+                import torch.distributed as dist
+                rank = dist.get_rank() if dist.is_initialized() else -1
+                print(f"[Pipeline Debug] rank={rank}, first_step={first_step}, "
+                      f"seq_len={seq_len}, bsz={bsz}, mode={mode}")
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         from vllm.forward_context import set_forward_context
