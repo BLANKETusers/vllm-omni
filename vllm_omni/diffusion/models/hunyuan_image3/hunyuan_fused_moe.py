@@ -64,6 +64,7 @@ class HunyuanFusedMoEDefault(FusedMoE):
                       f"is_sequence_parallel=True, sp_size={self.moe_parallel_config.sp_size}")
 
         self._init_hook_handle = self.register_forward_pre_hook(self._initialize_kernel_hook, with_kwargs=True)
+        self._debug_call_count = 0  # limit per-step debug prints
 
     def _initialize_kernel_hook(self, module: Any, args: Any, kwargs: Any) -> None:
         if self.quant_method and getattr(self.quant_method, "moe_kernel", None) is None:
@@ -104,6 +105,14 @@ class HunyuanFusedMoEDefault(FusedMoE):
             # _maybe_dispatch/_maybe_combine are also SKIPPED because dp_size=1.
             # This means super().forward() only does the local expert +
             # shared-expert kernel — exactly what we want.
+            self._debug_call_count += 1
+            if self._debug_call_count <= 3:
+                rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else -1
+                print(f"[MoE GEMM Debug] call={self._debug_call_count} rank={rank}, "
+                      f"hs_in.shape={hidden_states.shape}, hs_in.stride={hidden_states.stride()}, "
+                      f"hs_all.shape={hidden_states_all.shape}, hs_all.stride={hidden_states_all.stride()}, "
+                      f"hs_all.is_contiguous={hidden_states_all.is_contiguous()}, "
+                      f"local_num_experts={self.local_num_experts}, global_num_experts={self.global_num_experts}")
             _set_forward_context_num_tokens(hidden_states_all.shape[0])
             result = super(HunyuanFusedMoEDefault, self).forward(
                 hidden_states_all, router_logits_all
