@@ -2396,6 +2396,15 @@ class HunyuanImage3Model(nn.Module):
             query_lens = [prompt_size + shard_image_size for _ in query_lens]
 
             if prompt_size > 0:
+                if not hasattr(self, '_debug_input_done'):
+                    self._debug_input_done = True
+                    if not torch.compiler.is_compiling():
+                        import torch.distributed as dist
+                        r = dist.get_rank() if dist.is_initialized() else -1
+                        print(f"[SP Split] rank={r}, first_step={first_step}, "
+                              f"text={text_hidden_states.shape[1]}, "
+                              f"image={image_hidden_states.shape[1]}, "
+                              f"total={text_hidden_states.shape[1] + image_hidden_states.shape[1]}")
                 hidden_states = self.unifiled_cat(text_hidden_states, image_hidden_states, dim=1)
                 position_ids = self.unifiled_cat(text_position_ids, image_position_ids, dim=1)
                 custom_pos_emb = (
