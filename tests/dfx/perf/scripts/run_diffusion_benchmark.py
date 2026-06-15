@@ -78,6 +78,19 @@ _DATASET_NAME_MAP: dict[str, str] = {
 
 _DEFAULT_DATASET_NAME = "random-mm"
 
+# Flat metric fields written by ``vllm bench serve --omni`` (shared by record
+# builder and result summary).
+_VLLM_BENCH_METRIC_KEYS = (
+    "request_throughput",
+    "mean_ttft_ms",
+    "mean_tpot_ms",
+    "mean_e2el_ms",
+    "mean_itl_ms",
+    "image_generation_time_ms",
+    "image_pixels",
+    "denoise_step_latency_ms",
+)
+
 # Keys excluded from generic CLI pass-through in ``_build_omni_benchmark_args``
 # because they are already mapped to specific ``vllm bench serve`` arguments
 # (extra-body, endpoint, backend, etc.) or are sweep parameters handled by the
@@ -934,7 +947,12 @@ def _build_result_record(
     result: dict[str, Any],
     dataset_name: str,
 ) -> dict[str, Any]:
-    """Build the aggregated result record for a single benchmark sweep step."""
+    """Build the aggregated result record for a single benchmark sweep step.
+
+    Mirrors the record dict originally inlined in ``run_benchmark()``; only the
+    fields that differ from the old ``diffusion_benchmark_serving.py`` path are
+    patched after construction (see inline comments).
+    """
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     server_type = cast(str, (server_cfg or {}).get("server_type", "vllm-omni"))
     serve_args_dict = (server_cfg or {}).get("serve_args_dict", {})
@@ -946,22 +964,9 @@ def _build_result_record(
     failed = result.get("failed", 0)
     max_concurrency = sweep_run["max_concurrency"]
 
-    # Flat metric fields written by vllm bench serve --omni.
-    flat_metric_keys = (
-        "request_throughput",
-        "mean_ttft_ms",
-        "mean_tpot_ms",
-        "mean_e2el_ms",
-        "mean_itl_ms",
-        "image_generation_time_ms",
-        "image_pixels",
-        "denoise_step_latency_ms",
-    )
-
     record: dict[str, Any] = {
         "test_name": test_name,
         "endpoint": endpoint,
-        "backend": backend,
         "timestamp": timestamp,
         "server_params": (server_cfg or {}).get("server_params"),
         "benchmark_params": params,
@@ -972,16 +977,16 @@ def _build_result_record(
         "Hardware": "",
         "Deployment": "",
         "Task": params.get("task", "t2i"),
-        "Dataset": dataset_name,
+        "Dataset": params.get("dataset", "random"),
         "resolution": _to_resolution_string(params),
         "Parallelism": _to_parallelism_string(server_type, serve_args_dict),
-        "max_concurrency": max_concurrency if max_concurrency is not None else "",
+        "max_concurrency": params.get("max-concurrency", ""),
         "Cache": _to_cache_string(server_type, serve_args_dict),
         "Quantization": _to_quantization_value(server_type, serve_args_dict),
         "offload": _to_offload_string(server_type, serve_args_dict),
         "compile": _to_compile_value(server_type, serve_args_dict),
         "Attn_backend": os.environ.get("DIFFUSION_ATTENTION_BACKEND", ""),
-        "num_inference_steps": params.get("num-inference-steps", params.get("num_inference_steps", "")),
+        "num_inference_steps": params.get("num-inference-steps", ""),
         "completed": completed,
         "failed": failed,
         "commit_sha": _get_branchpoint_commit_sha(),
@@ -989,7 +994,24 @@ def _build_result_record(
         "build_url": os.environ.get("BUILDKITE_BUILD_URL", ""),
         "source_file": cast(str, CONFIG_FILE_PATH),
     }
-    for key in flat_metric_keys:
+
+    # --- fields that differ from the old diffusion_benchmark_serving.py path ---
+
+    # vllm bench serve backend name (new).
+    record["backend"] = backend
+
+    # Resolved dataset name (old path stored the raw "dataset" field).
+    record["Dataset"] = dataset_name
+
+    # max_concurrency taken from the sweep step, not params.
+    record["max_concurrency"] = max_concurrency if max_concurrency is not None else ""
+
+    # num_inference_steps may use underscore form in some configs.
+    record["num_inference_steps"] = params.get("num-inference-steps", params.get("num_inference_steps", ""))
+
+    # Replace old metric keys (throughput_qps, latency_*, …) with vllm bench
+    # serve --omni metric names (request_throughput, mean_ttft_ms, …).
+    for key in _VLLM_BENCH_METRIC_KEYS:
         record[key] = result.get(key)
 
     return record
@@ -1086,16 +1108,7 @@ def test_diffusion_performance_benchmark(diffusion_server, benchmark_params, req
         print(
             f"Results for {test_name} (server={diffusion_server.server_type}, endpoint={endpoint}, backend={backend}):"
         )
-        for key in (
-            "request_throughput",
-            "mean_ttft_ms",
-            "mean_tpot_ms",
-            "mean_e2el_ms",
-            "mean_itl_ms",
-            "image_generation_time_ms",
-            "image_pixels",
-            "denoise_step_latency_ms",
-        ):
+        for key in _VLLM_BENCH_METRIC_KEYS:
             if key in result:
                 print(f"  {key}: {result[key]:.4f}")
 
