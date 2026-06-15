@@ -908,9 +908,6 @@ def _build_omni_benchmark_args(
         if value is not None:
             extra_body[key] = value
 
-    # Request stage metrics from the server.
-    extra_body["request_stage_metrics"] = True
-
     if extra_body:
         args.extend(["--extra-body", json.dumps(extra_body, separators=(",", ":"))])
 
