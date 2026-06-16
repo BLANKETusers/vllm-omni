@@ -189,8 +189,8 @@ class RankGenerator:
         self.dp = dp
         self.fs = fs
         self.rank_offset = rank_offset
-        self.world_size = tp * sp * pp * cfg * dp
-        self.ep = tp * sp * cfg * dp  # EP level exclude PP
+        self.world_size = tp * sp * pp * (cfg + dp)
+        self.ep = tp * sp * (cfg + dp)  # EP level exclude PP
 
         self.name_to_size = {
             "tp": self.tp,
