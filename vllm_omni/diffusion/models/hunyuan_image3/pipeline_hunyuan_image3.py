@@ -6,6 +6,8 @@ import logging
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from torch.nn.attention import SDPBackend, sdpa_kernel
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -424,6 +426,7 @@ class HunyuanImage3Pipeline(
         self.setup_diffusion_pipeline_profiler(
             enable_diffusion_pipeline_profiler=self.od_config.enable_diffusion_pipeline_profiler,
         )
+        self._cudnn_warmup_done: bool = False
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         skip_prefixes = ["lm_head."] if self.hf_config.tie_word_embeddings else []
@@ -2092,6 +2095,25 @@ class HunyuanImage3Pipeline(
             state.extra[_STEP_MODEL_KWARGS] = next_kwargs
             state.extra[_STEP_INPUT_IDS] = None
 
+    def _warmup_cudnn_plan_cache(self, model_inputs: dict[str, Any]) -> None:
+        """Pre-fill cuDNN plan cache to avoid ~9ms per attn layer on first step."""
+        if self._cudnn_warmup_done:
+            return
+        attn = self.model.layers[self.model.start_layer].self_attn
+        nh, nkv, hd = attn.num_heads, attn.num_kv_heads, attn.head_dim
+        gqa = nh != nkv
+        bsz = len(model_inputs["query_lens"])
+        ql, sl = model_inputs["query_lens"][0], model_inputs["seq_lens"][0]
+        q = torch.randn(bsz, nh, ql, hd, device=self.device, dtype=torch.bfloat16)
+        k = torch.randn(bsz, nkv, sl, hd, device=self.device, dtype=torch.bfloat16)
+        v = torch.randn(bsz, nkv, sl, hd, device=self.device, dtype=torch.bfloat16)
+        mask = model_inputs["attention_mask"].to(torch.bool)
+        with sdpa_kernel([SDPBackend.CUDNN_ATTENTION]):
+            torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=hd**-0.5, enable_gqa=gqa)
+            torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask, scale=hd**-0.5, enable_gqa=gqa)
+        torch.cuda.synchronize()
+        self._cudnn_warmup_done = True
+
     def _denoise_step_group(self, states: list["DiffusionRequestState"]) -> torch.Tensor:
         first_step, cfg_factor = self._validate_step_group_states(states)
         row_state_indexes, row_branches = self._step_row_order(states, cfg_factor)
@@ -2123,6 +2145,7 @@ class HunyuanImage3Pipeline(
             timestep=timestep,
             **model_kwargs,
         )
+        self._warmup_cudnn_plan_cache(model_inputs)
 
         step_indexes = {state.step_index for state in states}
         context_step_index = next(iter(step_indexes)) if len(step_indexes) == 1 else None
