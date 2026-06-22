@@ -982,11 +982,17 @@ class ImageKVCacheManager:
         seq_len: int,
         shard_image_size: int | None = None,
         gen_timestep_scatter_index: torch.Tensor | None = None,
+        cached_prompt_lens: torch.Tensor | None = None,
+        cached_prompt_lens_max: int | None = None,
+        cached_prompt_lens_list: list[int] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Cache prompt KV on first_step. Consumes _injected_ar_kv.
 
         _injected_ar_kv is a per-batch list: [(k,v)] for bs=1,
         [(pos_k,pos_v), (neg_k,neg_v)] for bs=2 CFG.
+
+        When cached_prompt_lens* args are provided (pre-computed once by the
+        caller), both the tensor and per-layer .item() D2H syncs are reused.
         """
 
         ar_kv_list = self._injected_ar_kv
@@ -995,7 +1001,8 @@ class ImageKVCacheManager:
         bs, q_len, num_kv_heads, head_dim = key.shape
 
         ar_kv_len = ar_kv_list[0][0].shape[0] if ar_kv_list is not None else 0
-        assert q_len + ar_kv_len == seq_len, f"q_len({q_len}) + ar_kv_len({ar_kv_len}) != seq_len({seq_len})"
+        if logger.isEnabledFor(logging.DEBUG):
+            assert q_len + ar_kv_len == seq_len, f"q_len({q_len}) + ar_kv_len({ar_kv_len}) != seq_len({seq_len})"
 
         if ar_kv_len > 0:
             new_keys = []
@@ -1011,22 +1018,30 @@ class ImageKVCacheManager:
             key = torch.cat(new_keys, dim=0)
             value = torch.cat(new_values, dim=0)
 
-        cached_prompt_lens = self._get_current_starts(gen_timestep_scatter_index, ar_kv_len)
-        assert torch.all(cached_prompt_lens <= key.shape[1]), (
-            f"cached_prompt_lens({cached_prompt_lens.tolist()}) must be <= key length({key.shape[1]})"
-        )
-        if shard_image_size is not None:
-            expected_prompt_len = seq_len - shard_image_size
-            assert torch.all(cached_prompt_lens == expected_prompt_len), (
-                f"cached_prompt_lens({cached_prompt_lens.tolist()}) != "
-                f"seq_len({seq_len}) - shard_image_size({shard_image_size})"
-            )
+        # Reuse pre-computed tensor + Python ints when available
+        if cached_prompt_lens is not None:
+            max_cached_prompt_len = cached_prompt_lens_max
+            _lens_list = cached_prompt_lens_list
+        else:
+            cached_prompt_lens = self._get_current_starts(gen_timestep_scatter_index, ar_kv_len)
+            if logger.isEnabledFor(logging.DEBUG):
+                assert torch.all(cached_prompt_lens <= key.shape[1]), (
+                    f"cached_prompt_lens({cached_prompt_lens.tolist()}) must be <= key length({key.shape[1]})"
+                )
+            if shard_image_size is not None:
+                expected_prompt_len = seq_len - shard_image_size
+                if logger.isEnabledFor(logging.DEBUG):
+                    assert torch.all(cached_prompt_lens == expected_prompt_len), (
+                        f"cached_prompt_lens({cached_prompt_lens.tolist()}) != "
+                        f"seq_len({seq_len}) - shard_image_size({shard_image_size})"
+                    )
+            max_cached_prompt_len = int(cached_prompt_lens.max().item())
+            _lens_list = [int(cached_prompt_lens[b].item()) for b in range(bs)]
 
-        max_cached_prompt_len = int(cached_prompt_lens.max().item())
         cached_key = key.new_zeros(bs, max_cached_prompt_len, num_kv_heads, head_dim)
         cached_value = value.new_zeros(bs, max_cached_prompt_len, num_kv_heads, head_dim)
         for b in range(bs):
-            cached_prompt_len = int(cached_prompt_lens[b].item())
+            cached_prompt_len = _lens_list[b]
             cached_key[b, :cached_prompt_len] = key[b, :cached_prompt_len]
             cached_value[b, :cached_prompt_len] = value[b, :cached_prompt_len]
         self.image_kv_cache_map = (cached_key, cached_value)
@@ -1146,6 +1161,9 @@ class ImageKVCacheManager:
                 seq_len,
                 shard_image_size,
                 kwargs.get("gen_timestep_scatter_index"),
+                cached_prompt_lens=kwargs.get("cached_prompt_lens"),
+                cached_prompt_lens_max=kwargs.get("cached_prompt_lens_max"),
+                cached_prompt_lens_list=kwargs.get("cached_prompt_lens_list"),
             )
             if self.sp_size > 1:
                 local_prompt_len = seq_len - shard_image_size
@@ -2463,6 +2481,19 @@ class HunyuanImage3Model(nn.Module):
                 k_pad = attention_mask.new_zeros(B, H, Q + pad, pad)
                 attention_mask = torch.cat((attention_mask, k_pad), dim=3)
 
+        # Pre-compute cached_prompt_lens once to avoid per-layer .item() D2H syncs.
+        # gen_timestep_scatter_index is identical for all layers, so the computed
+        # values are too. Doing this once here instead of per-layer eliminates
+        # ~(1+bs)*num_layers GPU synchronizations on the first step.
+        if mode == "gen_image" and first_step and not uncond_cfg_prefill and gen_timestep_scatter_index is not None:
+            _cached_prompt_lens = gen_timestep_scatter_index[:, -1].to(dtype=torch.long) + ar_kv_reuse_len
+            _cached_prompt_lens_max = int(_cached_prompt_lens.max().item())
+            _cached_prompt_lens_list = [int(_cached_prompt_lens[b].item()) for b in range(_cached_prompt_lens.shape[0])]
+        else:
+            _cached_prompt_lens = None
+            _cached_prompt_lens_max = None
+            _cached_prompt_lens_list = None
+
         for layer_idx, decoder_layer in enumerate(self.layers):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
@@ -2486,6 +2517,9 @@ class HunyuanImage3Model(nn.Module):
                 shard_padding_size=shard_padding_size,
                 uncond_cfg_prefill=uncond_cfg_prefill,
                 full_attn_spans=full_attn_spans,
+                cached_prompt_lens=_cached_prompt_lens,
+                cached_prompt_lens_max=_cached_prompt_lens_max,
+                cached_prompt_lens_list=_cached_prompt_lens_list,
             )
 
             hidden_states = layer_outputs[0]
