@@ -3236,7 +3236,8 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
             image = image.squeeze(2)
 
         do_denormalize = [True] * image.shape[0]
-        image = self.image_processor.postprocess(image, output_type=output_type, do_denormalize=do_denormalize)
+        # "pt" skips .cpu()→numpy→PIL; conversion moved to engine post_process_func
+        image = self.image_processor.postprocess(image, output_type="pt", do_denormalize=do_denormalize)
 
         if not return_dict:
             return (image,)
