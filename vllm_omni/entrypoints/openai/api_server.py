@@ -2387,9 +2387,6 @@ def _normalize_image(image: Any) -> Any:
     """Normalize a single image output to a PIL-compatible format."""
     if isinstance(image, Image.Image):
         return image
-    import torch
-    if isinstance(image, torch.Tensor):
-        image = image.detach().cpu().permute(1, 2, 0).float().numpy()
     if not isinstance(image, np.ndarray):
         raise ValueError(f"Unsupported image type: {type(image)}")
     if not np.issubdtype(image.dtype, np.integer) and not np.issubdtype(image.dtype, np.floating):
