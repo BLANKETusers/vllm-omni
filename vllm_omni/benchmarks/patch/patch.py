@@ -390,6 +390,7 @@ class MixRequestFuncOutput(RequestFuncOutput):
     image_pixels: int = 0
     denoise_step_latency_ms: float = 0.0
     text_latency: float = 0.0
+    peak_memory_mb: float = 0.0
     #: Worst-case streaming-audio underrun (wall-clock seconds the player
     #: would have been starved). Populated by the audio-speech backend; ``0.0``
     #: for backends that do not run continuity analysis.
@@ -646,6 +647,19 @@ def _image_generation_ms_from_content(content: Any) -> float:
     return 0.0
 
 
+def _peak_memory_mb_from_content(content: Any) -> float:
+    """Extract peak_memory_mb from image content items in SSE delta."""
+    if not isinstance(content, list):
+        return 0.0
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        pm = item.get("peak_memory_mb")
+        if isinstance(pm, (int, float)) and float(pm) > 0:
+            return float(pm)
+    return 0.0
+
+
 async def async_request_openai_chat_omni_completions(
     request_func_input: RequestFuncInput,
     session: aiohttp.ClientSession,
@@ -682,6 +696,14 @@ async def async_request_openai_chat_omni_completions(
         },
     }
     _update_payload_common(payload, request_func_input)
+    # Pure diffusion benchmark sets ``_vllm_omni_no_stream`` in extra_body;
+    # strip streaming / text-generation fields to match old non-streaming behaviour.
+    extra_body = payload.get("extra_body") or {}
+    if extra_body.pop("_vllm_omni_no_stream", False):
+        payload.pop("temperature", None)
+        payload.pop("max_tokens", None)
+        payload.pop("stream", None)
+        payload.pop("stream_options", None)
     # Seed-TTS via chat: voice-clone fields live on the body; ensure audio is streamed.
     if getattr(request_func_input, "seed_tts_row", False):
         if payload.get("modalities") is None:
@@ -739,12 +761,15 @@ async def async_request_openai_chat_omni_completions(
         output.image_generation_time_ms = 0.0
         output.image_pixels = 0
         output.denoise_step_latency_ms = 0.0
+        output.peak_memory_mb = 0.0
         completion_tokens_seen = 0
         try:
+            raw_body = bytearray()
             async with session.post(url=api_url, json=payload, headers=headers) as response:
                 if response.status == 200:
                     handler = StreamedResponseHandler()
                     async for chunk_bytes in response.content.iter_any():
+                        raw_body.extend(chunk_bytes)
                         # NOTE: Do NOT strip() here; TCP may fragment the SSE messages,
                         # so stripping here can cause problems depending on how it is split.
                         #
@@ -839,6 +864,9 @@ async def async_request_openai_chat_omni_completions(
                                         content_image_ms = _image_generation_ms_from_content(content)
                                         if content_image_ms > 0:
                                             output.image_generation_time_ms += content_image_ms
+                                        peak_mem = _peak_memory_mb_from_content(content)
+                                        if peak_mem > 0:
+                                            output.peak_memory_mb = peak_mem
 
                                 (
                                     metrics_image_count,
@@ -866,6 +894,37 @@ async def async_request_openai_chat_omni_completions(
                         )
 
                     output.latency = timestamp - st
+                    # If no SSE data events were received (e.g. non-streaming
+                    # response from pure diffusion models), fall back to wall-clock
+                    # time since start.
+                    if output.latency == 0.0:
+                        output.latency = time.perf_counter() - st
+                    # For non-streaming responses (pure diffusion models), the SSE
+                    # handler produces no messages.  Fall back to parsing the raw
+                    # JSON body so that peak_memory_mb and stage_metrics are still
+                    # captured (matching old async_request_chat_completions).
+                    if output.peak_memory_mb == 0.0 and raw_body:
+                        try:
+                            resp_json = json.loads(raw_body.decode("utf-8"))
+                            choices = resp_json.get("choices", [])
+                            if choices and isinstance(choices, list):
+                                msg = choices[0].get("message", {})
+                                if isinstance(msg, dict):
+                                    content = msg.get("content", [])
+                                    if content and isinstance(content, list) and len(content) > 0:
+                                        first_item = content[0]
+                                        if isinstance(first_item, dict):
+                                            pm = first_item.get("peak_memory_mb")
+                                            if isinstance(pm, (int, float)) and float(pm) > 0:
+                                                output.peak_memory_mb = float(pm)
+                            if output.peak_memory_mb == 0.0:
+                                m = resp_json.get("metrics")
+                                if isinstance(m, dict):
+                                    pm = m.get("peak_memory_mb")
+                                    if isinstance(pm, (int, float)) and float(pm) > 0:
+                                        output.peak_memory_mb = float(pm)
+                        except (json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError):
+                            pass
                     output.generated_text = generated_text
                     if output.itl:
                         # Align text_latency with ITL so TPOT formula and
@@ -1031,10 +1090,12 @@ async def async_request_openai_image_edits_omni(
     most_recent_text_timestamp = st
     generated_text = ""
     try:
+        raw_body = bytearray()
         async with session.post(url=api_url, data=form, headers=headers) as response:
             if response.status == 200:
                 handler = StreamedResponseHandler()
                 async for chunk_bytes in response.content.iter_any():
+                    raw_body.extend(chunk_bytes)
                     if not chunk_bytes:
                         continue
                     for message in handler.add_chunk(chunk_bytes):
@@ -1070,6 +1131,9 @@ async def async_request_openai_image_edits_omni(
                             content_image_ms = _image_generation_ms_from_content(data.get("data"))
                             if content_image_ms > 0:
                                 output.image_generation_time_ms += content_image_ms
+                            peak_mem = _peak_memory_mb_from_content(data.get("data"))
+                            if peak_mem > 0:
+                                output.peak_memory_mb = peak_mem
                         (
                             metrics_image_count,
                             metrics_image_ms,
@@ -1085,6 +1149,34 @@ async def async_request_openai_image_edits_omni(
                         if metrics_denoise_step_ms > output.denoise_step_latency_ms:
                             output.denoise_step_latency_ms = metrics_denoise_step_ms
                 output.latency = timestamp - st
+                # If no SSE data events were received (e.g. non-streaming
+                # response from pure diffusion models), fall back to wall-clock
+                # time since start.
+                if output.latency == 0.0:
+                    output.latency = time.perf_counter() - st
+                # For non-streaming responses, fall back to raw JSON body.
+                if output.peak_memory_mb == 0.0 and raw_body:
+                    try:
+                        resp_json = json.loads(raw_body.decode("utf-8"))
+                        choices = resp_json.get("choices", [])
+                        if choices and isinstance(choices, list):
+                            msg = choices[0].get("message", {})
+                            if isinstance(msg, dict):
+                                content = msg.get("content", [])
+                                if content and isinstance(content, list) and len(content) > 0:
+                                    first_item = content[0]
+                                    if isinstance(first_item, dict):
+                                        pm = first_item.get("peak_memory_mb")
+                                        if isinstance(pm, (int, float)) and float(pm) > 0:
+                                            output.peak_memory_mb = float(pm)
+                        if output.peak_memory_mb == 0.0:
+                            m = resp_json.get("metrics")
+                            if isinstance(m, dict):
+                                pm = m.get("peak_memory_mb")
+                                if isinstance(pm, (int, float)) and float(pm) > 0:
+                                    output.peak_memory_mb = float(pm)
+                    except (json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError):
+                        pass
                 output.generated_text = generated_text
                 output.success = True
             else:
@@ -1523,6 +1615,9 @@ async def benchmark(
             defs.IMAGE_THROUGHPUT: getattr(metrics, defs.IMAGE_THROUGHPUT),
             defs.AVERAGE_PIXELS_PER_IMAGE: getattr(metrics, defs.AVERAGE_PIXELS_PER_IMAGE),
             defs.MEAN_DENOISE_STEP_LATENCY_MS: getattr(metrics, defs.MEAN_DENOISE_STEP_LATENCY_MS),
+            defs.PEAK_MEMORY_MB_MAX: getattr(metrics, defs.PEAK_MEMORY_MB_MAX),
+            defs.PEAK_MEMORY_MB_MEAN: getattr(metrics, defs.PEAK_MEMORY_MB_MEAN),
+            defs.PEAK_MEMORY_MB_MEDIAN: getattr(metrics, defs.PEAK_MEMORY_MB_MEDIAN),
             "input_lens": [output.prompt_len for output in outputs],
             "start_times": [output.start_time for output in outputs],
             "output_lens": actual_output_lens,

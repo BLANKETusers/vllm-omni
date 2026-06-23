@@ -57,15 +57,14 @@ _BASELINE_METRIC_MAP: dict[str, str] = {
     "latency_p50": "p50_e2el_ms",
     "latency_p95": "p95_e2el_ms",
     "latency_p99": "p99_e2el_ms",
+    "peak_memory_mb_max": "peak_memory_mb_max",
+    "peak_memory_mb_mean": "peak_memory_mb_mean",
+    "peak_memory_mb_median": "peak_memory_mb_median",
 }
 
 # Metrics available in the old benchmark that have no vLLM bench serve equivalent.
-# ``vllm bench serve --omni`` does not expose memory metrics or latency std dev.
 _BASELINE_METRICS_UNAVAILABLE: frozenset[str] = frozenset(
     {
-        "peak_memory_mb_max",
-        "peak_memory_mb_mean",
-        "peak_memory_mb_median",
         "latency_std_dev",
     }
 )
@@ -86,9 +85,29 @@ _VLLM_BENCH_METRIC_KEYS = (
     "mean_tpot_ms",
     "mean_e2el_ms",
     "mean_itl_ms",
+    "median_e2el_ms",
+    "p50_e2el_ms",
+    "p95_e2el_ms",
+    "p99_e2el_ms",
     "image_generation_time_ms",
     "image_pixels",
     "denoise_step_latency_ms",
+    "peak_memory_mb_max",
+    "peak_memory_mb_mean",
+    "peak_memory_mb_median",
+)
+
+# Old metric names for console output, matching the original
+# ``diffusion_benchmark_serving.py`` display order.
+_OLD_DISPLAY_METRIC_KEYS = (
+    "throughput_qps",
+    "latency_mean",
+    "latency_median",
+    "latency_p50",
+    "latency_p99",
+    "peak_memory_mb_max",
+    "peak_memory_mb_mean",
+    "peak_memory_mb_median",
 )
 
 # Keys excluded from generic CLI pass-through in ``_build_omni_benchmark_args``
@@ -119,6 +138,12 @@ _BENCHMARK_PASSTHROUGH_EXCLUDE_KEYS: frozenset[str] = frozenset(
         "max-concurrency",
         "request-rate",
         "num-prompts",
+        "random_input_len",
+        "random_output_len",
+        "percentile-metrics",
+        "ignore-eos",
+        "ignore_eos",
+        "random-mm-base-items-per-request",
     }
 )
 
@@ -883,13 +908,31 @@ def _build_omni_benchmark_args(
         "--skip-chat-template",
     ]
 
+    # Request percentile metrics for latency breakdown.
+    args += ["--percentile-metrics", "ttft,tpot,itl,e2el"]
+
+    # Suppress random multimodal content so requests are text-only,
+    # matching the old RandomDataset behaviour from diffusion_benchmark_serving.py.
+    args += ["--random-mm-base-items-per-request", "0"]
+
+    # Forward random-input-len / random-output-len if present in config.
+    for rl_key in ("random_input_len", "random-input-len"):
+        rl_value = params.get(rl_key)
+        if rl_value is not None:
+            args += ["--random-input-len", str(rl_value)]
+            break
+    for rl_key in ("random_output_len", "random-output-len"):
+        rl_value = params.get(rl_key)
+        if rl_value is not None:
+            args += ["--random-output-len", str(rl_value)]
+            break
+
+    # Forward ignore-eos if set.
+    if params.get("ignore-eos") or params.get("ignore_eos"):
+        args.append("--ignore-eos")
+
     # Build extra-body JSON from diffusion-specific params.
     extra_body: dict[str, Any] = {}
-
-    # Modality: always request image output for t2i tasks.
-    task = params.get("task", "t2i")
-    modalities = ["text", "image"] if task in {"t2i", "i2i", "ti2i", "it2i"} else ["text"]
-    extra_body["modalities"] = modalities
 
     # Map diffusion-specific params into extra-body.
     extra_body_keys = {
@@ -907,6 +950,10 @@ def _build_omni_benchmark_args(
         value = params.get(key) or params.get(key.replace("_", "-"))
         if value is not None:
             extra_body[key] = value
+
+    # Signal patch.py that this is a pure diffusion request:
+    # no text output → skip streaming and text-generation fields.
+    extra_body["_vllm_omni_no_stream"] = True
 
     if extra_body:
         args.extend(["--extra-body", json.dumps(extra_body, separators=(",", ":"))])
@@ -997,9 +1044,6 @@ def _build_result_record(
     # vllm bench serve backend name (new).
     record["backend"] = backend
 
-    # Resolved dataset name (old path stored the raw "dataset" field).
-    record["Dataset"] = dataset_name
-
     # max_concurrency taken from the sweep step, not params.
     record["max_concurrency"] = max_concurrency if max_concurrency is not None else ""
 
@@ -1010,6 +1054,21 @@ def _build_result_record(
     # serve --omni metric names (request_throughput, mean_ttft_ms, …).
     for key in _VLLM_BENCH_METRIC_KEYS:
         record[key] = result.get(key)
+    # Also copy any additional percentile / metric fields that vllm bench serve
+    # wrote into the result dict (median_*_ms, p50/p95/p99_*, audio metrics,
+    # etc.) so they are not lost in the aggregated record.
+    for key, value in result.items():
+        if key.startswith(("mean_", "median_", "p", "peak_memory_mb_", "request_throughput", "image_", "denoise_")) and key not in record:
+            record[key] = value
+    # Also store metrics under old names (throughput_qps, latency_*, etc.)
+    # for backward compatibility with existing dashboards and baseline configs.
+    for old_key, new_key in _BASELINE_METRIC_MAP.items():
+        value = result.get(new_key)
+        # vllm bench serve reports latencies in milliseconds;
+        # old diffusion_benchmark_serving.py used seconds.
+        if value is not None and old_key.startswith("latency_"):
+            value = float(value) / 1000.0
+        record[old_key] = value
 
     return record
 
@@ -1105,9 +1164,14 @@ def test_diffusion_performance_benchmark(diffusion_server, benchmark_params, req
         print(
             f"Results for {test_name} (server={diffusion_server.server_type}, endpoint={endpoint}, backend={backend}):"
         )
-        for key in _VLLM_BENCH_METRIC_KEYS:
-            if key in result:
-                print(f"  {key}: {result[key]:.4f}")
+        for old_key in _OLD_DISPLAY_METRIC_KEYS:
+            new_key = _BASELINE_METRIC_MAP.get(old_key, old_key)
+            value = result.get(new_key)
+            if value is not None and isinstance(value, (int, float)):
+                # vllm bench serve reports in ms; old benchmark used seconds.
+                if old_key.startswith("latency_"):
+                    value = value / 1000.0
+                print(f"  {old_key}: {value:.4f}")
 
         print("=" * 60)
 
