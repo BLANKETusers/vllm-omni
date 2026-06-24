@@ -6,8 +6,6 @@ import logging
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from torch.nn.attention import SDPBackend, sdpa_kernel
-
 import numpy as np
 import torch
 import torch.nn as nn
@@ -15,6 +13,7 @@ from diffusers.schedulers.scheduling_flow_match_euler_discrete import (
     FlowMatchEulerDiscreteScheduler,
 )
 from PIL import Image as PILImage
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from transformers.generation.configuration_utils import GenerationConfig
 from transformers.generation.utils import ALL_CACHE_NAMES, GenerationMixin
 from transformers.utils.generic import ModelOutput
@@ -2138,7 +2137,7 @@ class HunyuanImage3Pipeline(
         with sdpa_kernel([SDPBackend.CUDNN_ATTENTION]):
             torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=hd**-0.5, enable_gqa=gqa)
             torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask, scale=hd**-0.5, enable_gqa=gqa)
-        torch.cuda.synchronize()
+        torch.accelerator.synchronize()
         self._cudnn_warmup_done = True
 
     def _denoise_step_group(self, states: list["DiffusionRequestState"]) -> torch.Tensor:

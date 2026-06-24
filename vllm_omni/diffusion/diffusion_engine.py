@@ -168,9 +168,7 @@ class DiffusionEngine:
         # Postprocess is submitted here by the busy_loop BEFORE setting the
         # asyncio future so that the next request's GPU work can start
         # immediately while postprocess runs in a separate thread.
-        self._postproc_pool = concurrent.futures.ThreadPoolExecutor(
-            max_workers=2, thread_name_prefix="diff_pp"
-        )
+        self._postproc_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="diff_pp")
         # request_id → Future[postprocessed_data]
         # Populated by _busy_loop, consumed by step().
         self._postproc_results: dict[str, concurrent.futures.Future] = {}
@@ -405,17 +403,10 @@ class DiffusionEngine:
             # immediately while postprocess runs in a separate thread.
             # Skip thread-pool offload when the post_process_func needs
             # per-request sampling_params (e.g. video frame interpolation).
-            if (
-                self.post_process_func is not None
-                and not self._post_process_accepts_sampling_params
-            ):
+            if self.post_process_func is not None and not self._post_process_accepts_sampling_params:
                 for rid in finished_req_ids:
                     req_out = runner_output.get_request_output(rid)
-                    if (
-                        req_out is not None
-                        and req_out.result is not None
-                        and req_out.result.output is not None
-                    ):
+                    if req_out is not None and req_out.result is not None and req_out.result.output is not None:
                         self._postproc_results[rid] = self._postproc_pool.submit(
                             self._do_postprocess, rid, req_out.result.output
                         )
@@ -937,7 +928,7 @@ class DiffusionEngine:
         self.executor.shutdown()
         # Shut down the postprocess thread pool. wait=False so any still-running
         # tasks are abandoned (the engine is shutting down anyway).
-        if hasattr(self, '_postproc_pool'):
+        if hasattr(self, "_postproc_pool"):
             self._postproc_pool.shutdown(wait=False)
         self._shutdown_complete = True
 
