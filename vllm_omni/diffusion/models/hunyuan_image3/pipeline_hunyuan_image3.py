@@ -335,16 +335,24 @@ def get_hunyuan_image_3_pre_process_func(od_config: OmniDiffusionConfig):
 
 
 def get_hunyuan_image3_post_process(od_config: OmniDiffusionConfig):
-    """GPU tensor → PIL, runs outside pipeline_forward to overlap with next request."""
-    from diffusers.image_processor import VaeImageProcessor
+    """GPU tensor → PIL, runs outside pipeline_forward to overlap with next request.
 
-    hf_config = get_config(od_config.model, trust_remote_code=True)
-    vae_scale_factor = hf_config.vae_downsample_factor
-    image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor)
+    1. Denormalize on GPU (vectorized, no per-image Python loop)
+    2. .cpu() sync + permute → numpy
+    3. numpy → PIL
+    """
+    from PIL import Image
 
     def post_process_func(images: torch.Tensor):
-        # denormalize was already done inside pipeline_forward (output_type="pt")
-        return image_processor.postprocess(images, output_type="pil", do_denormalize=False)
+        # 1. GPU denormalize: (images / 2 + 0.5).clamp(0, 1) — single vectorized kernel
+        images = (images / 2 + 0.5).clamp(0, 1)
+        # 2. GPU→CPU sync + permute BCHW→BHWC + numpy
+        images = images.cpu().permute(0, 2, 3, 1).float().numpy()
+        # 3. numpy → PIL (uint8)
+        images = (images * 255).round().astype("uint8")
+        if images.shape[-1] == 1:
+            return [Image.fromarray(img.squeeze(), mode="L") for img in images]
+        return [Image.fromarray(img) for img in images]
 
     return post_process_func
 
