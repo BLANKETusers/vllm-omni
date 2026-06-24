@@ -788,10 +788,9 @@ async def async_request_openai_chat_omni_completions(
         },
     }
     _update_payload_common(payload, request_func_input)
-    # Pure diffusion benchmark sets ``_vllm_omni_no_stream`` in extra_body;
-    # strip streaming / text-generation fields to match old non-streaming behaviour.
-    extra_body = payload.get("extra_body") or {}
-    if extra_body.pop("_vllm_omni_no_stream", False):
+    # Pure diffusion benchmark sets ``_vllm_omni_no_stream`` in extra_body,
+    # which ``_update_payload_common`` flattens to the top-level payload.
+    if payload.pop("_vllm_omni_no_stream", False):
         payload.pop("temperature", None)
         payload.pop("max_tokens", None)
         payload.pop("stream", None)
