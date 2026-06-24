@@ -344,6 +344,10 @@ def get_hunyuan_image3_post_process(od_config: OmniDiffusionConfig):
     from PIL import Image
 
     def post_process_func(images: torch.Tensor):
+        # Normalize to 4D BCHW: forward() slices the batch dim (outputs[0])
+        # before passing to us, so we may receive 3D CHW input.
+        if images.dim() == 3:
+            images = images.unsqueeze(0)
         # 1. GPU denormalize: (images / 2 + 0.5).clamp(0, 1) — single vectorized kernel
         images = (images / 2 + 0.5).clamp(0, 1)
         # 2. GPU→CPU sync + permute BCHW→BHWC + numpy
