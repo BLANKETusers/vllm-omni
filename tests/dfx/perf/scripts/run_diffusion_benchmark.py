@@ -37,6 +37,7 @@ import pytest
 
 from benchmarks.diffusion.backends import normalize_endpoint
 from tests.dfx.conftest import run_benchmark as conftest_run_benchmark
+from vllm_omni.metrics import definitions as defs
 
 pytestmark = [pytest.mark.diffusion, pytest.mark.full_model]
 
@@ -57,9 +58,9 @@ _BASELINE_METRIC_MAP: dict[str, str] = {
     "latency_p50": "p50_e2el_ms",
     "latency_p95": "p95_e2el_ms",
     "latency_p99": "p99_e2el_ms",
-    "peak_memory_mb_max": "peak_memory_mb_max",
-    "peak_memory_mb_mean": "peak_memory_mb_mean",
-    "peak_memory_mb_median": "peak_memory_mb_median",
+    "peak_memory_mb_max": defs.PEAK_MEMORY_MB_MAX,
+    "peak_memory_mb_mean": defs.PEAK_MEMORY_MB_MEAN,
+    "peak_memory_mb_median": defs.PEAK_MEMORY_MB_MEDIAN,
 }
 
 # Metrics available in the old benchmark that have no vLLM bench serve equivalent.
@@ -89,12 +90,12 @@ _VLLM_BENCH_METRIC_KEYS = (
     "p50_e2el_ms",
     "p95_e2el_ms",
     "p99_e2el_ms",
-    "image_generation_time_ms",
-    "image_pixels",
-    "denoise_step_latency_ms",
-    "peak_memory_mb_max",
-    "peak_memory_mb_mean",
-    "peak_memory_mb_median",
+    defs.IMAGE_GENERATION_TIME_MS,
+    defs.IMAGE_PIXELS,
+    defs.MEAN_DENOISE_STEP_LATENCY_MS,
+    defs.PEAK_MEMORY_MB_MAX,
+    defs.PEAK_MEMORY_MB_MEAN,
+    defs.PEAK_MEMORY_MB_MEDIAN,
 )
 
 # Old metric names for console output, matching the original
@@ -717,6 +718,9 @@ def assert_result(
             continue
         lookup_key = _BASELINE_METRIC_MAP.get(metric, metric)
         current = result.get(lookup_key)
+        # vllm bench serve reports latencies in ms; baseline values are in s.
+        if current is not None and metric.startswith("latency_"):
+            current = float(current) / 1000.0
         assert current is not None, (
             f"Metric '{metric}' (lookup: '{lookup_key}') not found in result: {list(result.keys())}"
         )
@@ -1058,7 +1062,10 @@ def _build_result_record(
     # wrote into the result dict (median_*_ms, p50/p95/p99_*, audio metrics,
     # etc.) so they are not lost in the aggregated record.
     for key, value in result.items():
-        if key.startswith(("mean_", "median_", "p", "peak_memory_mb_", "request_throughput", "image_", "denoise_")) and key not in record:
+        if (
+            key.startswith(("mean_", "median_", "p", "peak_memory_mb_", "request_throughput", "image_", "denoise_"))
+            and key not in record
+        ):
             record[key] = value
     # Also store metrics under old names (throughput_qps, latency_*, etc.)
     # for backward compatibility with existing dashboards and baseline configs.
