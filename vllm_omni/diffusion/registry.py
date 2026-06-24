@@ -522,6 +522,7 @@ _DIFFUSION_POST_PROCESS_FUNCS = {
     "Cosmos3OmniDiffusersPipeline": "get_cosmos3_post_process_func",
     "HiDreamImagePipeline": "get_hidream_image_post_process_func",
     "StableDiffusionXLPipeline": "get_sdxl_image_post_process_func",
+    "HunyuanImage3ForCausalMM": "get_hunyuan_image3_post_process",
 }
 
 _DIFFUSION_ACTION_POST_PROCESS_FUNCS = {
