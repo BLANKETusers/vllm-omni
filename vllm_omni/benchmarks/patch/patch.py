@@ -226,10 +226,12 @@ def _build_custom_image_requests(
         # Build multimodal content: each image URL becomes an image_url entry.
         mm_content: list[dict] = []
         for img_url in image_files:
-            mm_content.append({
-                "type": "image_url",
-                "image_url": {"url": str(img_url)},
-            })
+            mm_content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": str(img_url)},
+                }
+            )
 
         # Compute prompt_len from the tokenizer.  When tokenizer is unavailable
         # (e.g. --skip-chat-template is set but no tokenizer is loaded), fall
@@ -446,9 +448,7 @@ def get_samples(args, tokenizer):
                     continue
                 row = json.loads(line)
                 if "prompt" not in row:
-                    raise ValueError(
-                        "Each line in the custom-image JSONL must contain a 'prompt' field."
-                    )
+                    raise ValueError("Each line in the custom-image JSONL must contain a 'prompt' field.")
                 custom_data.append(row)
 
         input_requests = _build_custom_image_requests(
