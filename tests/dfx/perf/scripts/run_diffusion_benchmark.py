@@ -74,6 +74,7 @@ _BASELINE_METRICS_UNAVAILABLE: frozenset[str] = frozenset(
 # dataset identifiers (``"random-mm"`` for Omni's random multimodal dataset).
 _DATASET_NAME_MAP: dict[str, str] = {
     "random": "random-mm",
+    "custom_image": "custom-image",
 }
 
 _DEFAULT_DATASET_NAME = "random-mm"
@@ -955,9 +956,22 @@ def _build_omni_benchmark_args(
         if value is not None:
             extra_body[key] = value
 
-    # Signal patch.py that this is a pure diffusion request:
-    # no text output → skip streaming and text-generation fields.
-    extra_body["_vllm_omni_no_stream"] = True
+    # For image-generation tasks routed through the chat-completions endpoint,
+    # add modalities=["image"] so that ``should_request_stage_metrics`` in
+    # patch.py enables server-side stage-metric collection.  Without this,
+    # enable-diffusion-pipeline-profiler on the server has no effect on the
+    # client side because the extra_body contains no modalities hint.
+    task = params.get("task", "t2i")
+    if task in {"t2i", "i2i", "ti2i"}:
+        extra_body["modalities"] = ["image"]
+
+    # Signal patch.py that this is a pure diffusion request via
+    # chat-completions: no text output → skip streaming and text-generation
+    # fields.  The image-edits endpoint (/v1/images/edits) is a multi-stage
+    # pipeline that natively streams AR text + DiT image chunks, so we do NOT
+    # set this flag for image-edits — streaming is its correct protocol.
+    if endpoint != "/v1/images/edits":
+        extra_body["_vllm_omni_no_stream"] = True
 
     if extra_body:
         args.extend(["--extra-body", json.dumps(extra_body, separators=(",", ":"))])

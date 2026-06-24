@@ -196,6 +196,64 @@ def _daily_omni_repo_from_args(args) -> str | None:
     return None
 
 
+def _build_custom_image_requests(
+    custom_data: list[dict],
+    tokenizer: TokenizerLike,
+    num_requests: int,
+    output_len: int | None = None,
+    request_id_prefix: str = "",
+    no_oversample: bool = False,
+) -> list[SampleRequest]:
+    """Build ``SampleRequest`` objects from inline custom-image JSONL data.
+
+    Each row in ``custom_data`` is expected to have:
+      - ``prompt`` (str): the text prompt
+      - ``image_files`` (list[str], optional): list of image URLs or file paths
+
+    The resulting requests are suitable for the ``openai-image-edits-omni``
+    backend, with ``multi_modal_data`` containing ``image_url`` entries that
+    ``_iter_image_edit_inputs`` can consume.
+    """
+    sampled_requests: list[SampleRequest] = []
+
+    # Cycle through data to reach num_requests (unless no_oversample is set and
+    # there are more data rows than needed).
+    for i in range(num_requests):
+        row = custom_data[i % len(custom_data)]
+        prompt = row["prompt"]
+        image_files = row.get("image_files") or []
+
+        # Build multimodal content: each image URL becomes an image_url entry.
+        mm_content: list[dict] = []
+        for img_url in image_files:
+            mm_content.append({
+                "type": "image_url",
+                "image_url": {"url": str(img_url)},
+            })
+
+        # Compute prompt_len from the tokenizer.  When tokenizer is unavailable
+        # (e.g. --skip-chat-template is set but no tokenizer is loaded), fall
+        # back to a conservative character-based estimate.
+        if tokenizer is not None:
+            prompt_len = len(tokenizer.encode(prompt))
+        else:
+            prompt_len = len(prompt) // 4
+
+        request_id = f"{request_id_prefix}{i}" if request_id_prefix else str(i)
+
+        sampled_requests.append(
+            SampleRequest(
+                prompt=prompt,
+                prompt_len=prompt_len,
+                expected_output_len=output_len or 1,
+                multi_modal_data=mm_content if mm_content else None,
+                request_id=request_id,
+            )
+        )
+
+    return sampled_requests
+
+
 def get_samples(args, tokenizer):
     # Daily-Omni: explicit dataset name, or hf + matching path/hf-name
     is_daily_omni = args.dataset_name == "daily-omni" or (
@@ -211,7 +269,7 @@ def get_samples(args, tokenizer):
 
     # Check if we need to handle omni-related backends/datasets
     is_omni_backend = args.backend in ["openai-chat-omni", "openai-audio-speech", "daily-omni"]
-    is_omni_dataset = is_daily_omni or is_seed_tts or args.dataset_name == "random-mm"
+    is_omni_dataset = is_daily_omni or is_seed_tts or args.dataset_name in ("random-mm", "custom-image")
 
     if not is_omni_backend and not is_omni_dataset:
         # Not an omni-related request, delegate to original implementation
@@ -364,6 +422,40 @@ def get_samples(args, tokenizer):
             limit_mm_per_prompt=args.random_mm_limit_mm_per_prompt,
             num_mm_items_range_ratio=args.random_mm_num_mm_items_range_ratio,
             bucket_config=args.random_mm_bucket_config,
+            request_id_prefix=args.request_id_prefix,
+            no_oversample=args.no_oversample,
+        )
+        return input_requests
+
+    # Handle custom-image dataset: reads a JSONL file where each line is
+    # {"prompt": "...", "image_files": ["https://...", ...]} and creates
+    # SampleRequest objects with multimodal image content for the
+    # openai-image-edits-omni backend.
+    if args.dataset_name == "custom-image":
+        if not args.dataset_path:
+            raise ValueError(
+                "custom-image dataset requires --dataset-path pointing to a JSONL file "
+                "(generated from --dataset-path-inline in the test config)."
+            )
+        dataset_path = args.dataset_path
+        custom_data: list[dict] = []
+        with open(dataset_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                row = json.loads(line)
+                if "prompt" not in row:
+                    raise ValueError(
+                        "Each line in the custom-image JSONL must contain a 'prompt' field."
+                    )
+                custom_data.append(row)
+
+        input_requests = _build_custom_image_requests(
+            custom_data=custom_data,
+            tokenizer=tokenizer,
+            num_requests=args.num_prompts,
+            output_len=getattr(args, "random_output_len", None),
             request_id_prefix=args.request_id_prefix,
             no_oversample=args.no_oversample,
         )
@@ -901,11 +993,14 @@ async def async_request_openai_chat_omni_completions(
                         output.latency = time.perf_counter() - st
                     # For non-streaming responses (pure diffusion models), the SSE
                     # handler produces no messages.  Fall back to parsing the raw
-                    # JSON body so that peak_memory_mb and stage_metrics are still
-                    # captured (matching old async_request_chat_completions).
-                    if output.peak_memory_mb == 0.0 and raw_body:
+                    # JSON body so that peak_memory_mb, stage_metrics, and
+                    # image-generation metrics are still captured (matching old
+                    # async_request_chat_completions).
+                    if raw_body:
                         try:
                             resp_json = json.loads(raw_body.decode("utf-8"))
+
+                            # --- peak_memory_mb (from content[0] or top-level metrics) ---
                             choices = resp_json.get("choices", [])
                             if choices and isinstance(choices, list):
                                 msg = choices[0].get("message", {})
@@ -923,6 +1018,25 @@ async def async_request_openai_chat_omni_completions(
                                     pm = m.get("peak_memory_mb")
                                     if isinstance(pm, (int, float)) and float(pm) > 0:
                                         output.peak_memory_mb = float(pm)
+
+                            # --- stage_metrics snapshot (per-stage timing / metadata) ---
+                            _update_output_stage_metrics_from_payload(output, resp_json)
+
+                            # --- image-generation metrics extracted from stage_metrics ---
+                            (
+                                metrics_image_count,
+                                metrics_image_ms,
+                                metrics_image_pixels,
+                                metrics_denoise_step_ms,
+                            ) = _image_metrics_from_stage_metrics(resp_json.get("metrics"))
+                            if metrics_image_count > output.image_count:
+                                output.image_count = metrics_image_count
+                            if metrics_image_ms > output.image_generation_time_ms:
+                                output.image_generation_time_ms = metrics_image_ms
+                            if metrics_image_pixels > output.image_pixels:
+                                output.image_pixels = metrics_image_pixels
+                            if metrics_denoise_step_ms > output.denoise_step_latency_ms:
+                                output.denoise_step_latency_ms = metrics_denoise_step_ms
                         except (json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError):
                             pass
                     output.generated_text = generated_text
@@ -1154,10 +1268,14 @@ async def async_request_openai_image_edits_omni(
                 # time since start.
                 if output.latency == 0.0:
                     output.latency = time.perf_counter() - st
-                # For non-streaming responses, fall back to raw JSON body.
-                if output.peak_memory_mb == 0.0 and raw_body:
+                # For non-streaming responses, fall back to raw JSON body
+                # so that peak_memory_mb, stage_metrics, and image-generation
+                # metrics are still captured.
+                if raw_body:
                     try:
                         resp_json = json.loads(raw_body.decode("utf-8"))
+
+                        # --- peak_memory_mb (from content[0] or top-level metrics) ---
                         choices = resp_json.get("choices", [])
                         if choices and isinstance(choices, list):
                             msg = choices[0].get("message", {})
@@ -1175,6 +1293,25 @@ async def async_request_openai_image_edits_omni(
                                 pm = m.get("peak_memory_mb")
                                 if isinstance(pm, (int, float)) and float(pm) > 0:
                                     output.peak_memory_mb = float(pm)
+
+                        # --- stage_metrics snapshot (per-stage timing / metadata) ---
+                        _update_output_stage_metrics_from_payload(output, resp_json)
+
+                        # --- image-generation metrics extracted from stage_metrics ---
+                        (
+                            metrics_image_count,
+                            metrics_image_ms,
+                            metrics_image_pixels,
+                            metrics_denoise_step_ms,
+                        ) = _image_metrics_from_stage_metrics(resp_json.get("metrics"))
+                        if metrics_image_count > output.image_count:
+                            output.image_count = metrics_image_count
+                        if metrics_image_ms > output.image_generation_time_ms:
+                            output.image_generation_time_ms = metrics_image_ms
+                        if metrics_image_pixels > output.image_pixels:
+                            output.image_pixels = metrics_image_pixels
+                        if metrics_denoise_step_ms > output.denoise_step_latency_ms:
+                            output.denoise_step_latency_ms = metrics_denoise_step_ms
                     except (json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError):
                         pass
                 output.generated_text = generated_text
