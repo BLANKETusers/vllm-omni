@@ -2250,18 +2250,14 @@ class HunyuanImage3Pipeline(
         if hasattr(self.vae, "ffactor_temporal"):
             assert image.shape[2] == 1, "image should have shape [B, C, T, H, W] and T should be 1"
             image = image.squeeze(2)
-        image = self.pipeline.image_processor.postprocess(
-            image,
-            output_type=output_type,
-            do_denormalize=[True] * image.shape[0],
-        )
+        # Postprocess deferred to engine post_process_func (same as pipeline_forward).
 
         cot_text_list = state.extra.get(_STEP_COT_TEXT_LIST) or []
         custom_output = {}
         if any(text is not None for text in cot_text_list):
             custom_output["ar_generated_text"] = cot_text_list[0]
         return DiffusionOutput(
-            output=image[0],
+            output=image,
             custom_output=custom_output,
             stage_durations=getattr(self, "stage_durations", None),
         )
