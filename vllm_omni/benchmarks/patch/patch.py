@@ -1465,6 +1465,211 @@ async def async_request_openai_audio_speech(
     return output
 
 
+async def async_request_openai_videos_omni(
+    request_func_input: RequestFuncInput,
+    session: aiohttp.ClientSession,
+    pbar: tqdm | None = None,
+) -> MixRequestFuncOutput:
+    """Async job-based request to ``/v1/videos`` for video generation benchmarks.
+
+    Protocol: POST ``/v1/videos`` → poll ``GET /v1/videos/{id}`` →
+    ``GET /v1/videos/{id}/content``.
+    """
+    api_url = request_func_input.api_url
+    _validate_api_url(api_url, "OpenAI Videos API", "v1/videos")
+
+    extra_body = dict(request_func_input.extra_body or {})
+    model = request_func_input.model_name if request_func_input.model_name else request_func_input.model
+
+    output = MixRequestFuncOutput()
+    output.prompt_len = request_func_input.prompt_len
+
+    # Build multipart form data.
+    form = aiohttp.FormData()
+    form.add_field("model", model)
+    if request_func_input.prompt:
+        form.add_field("prompt", str(request_func_input.prompt))
+
+    _VIDEO_FORM_KEYS = (
+        "width", "height", "num_frames", "num_inference_steps",
+        "seed", "fps", "negative_prompt", "guidance_scale",
+    )
+    for key in _VIDEO_FORM_KEYS:
+        value = extra_body.get(key)
+        if value is not None:
+            form.add_field(key, str(value))
+
+    # Attach input reference image(s) from multimodal content (i2v / ti2v).
+    image_index = 0
+    for image_input in _iter_image_edit_inputs(request_func_input.multi_modal_content):
+        _add_video_input_reference_to_form(form, image_input, image_index)
+        image_index += 1
+
+    headers = {
+        "Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}",
+    }
+    _update_headers_common(headers, request_func_input)
+
+    st = time.perf_counter()
+    output.start_time = st
+    job_id: str | None = None
+
+    try:
+        # --- POST /v1/videos ---
+        async with session.post(url=api_url, data=form, headers=headers) as response:
+            if response.status != 200:
+                output.error = f"HTTP {response.status}: {await response.text()}"
+                output.success = False
+                if pbar:
+                    pbar.update(1)
+                return output
+            resp_json = await response.json()
+            job_id = resp_json.get("id")
+            job_status = resp_json.get("status")
+            if not job_id or not job_status:
+                output.error = "API response missing job 'id' or 'status' field."
+                output.success = False
+                if pbar:
+                    pbar.update(1)
+                return output
+            # Capture peak_memory_mb from initial response if present.
+            pm = resp_json.get("peak_memory_mb")
+            if isinstance(pm, (int, float)) and float(pm) > 0:
+                output.peak_memory_mb = float(pm)
+
+        # --- Poll GET /v1/videos/{id} ---
+        poll_interval = 2.0
+        timeout_seconds = 600.0
+        deadline = time.perf_counter() + timeout_seconds
+        job_url = f"{api_url}/{job_id}"
+        poll_json: dict[str, Any] = {}
+
+        while job_status not in {"completed", "failed"}:
+            await asyncio.sleep(poll_interval)
+
+            async with session.get(job_url, headers=headers) as poll_response:
+                if poll_response.status != 200:
+                    output.error = (
+                        f"Polling failed HTTP {poll_response.status}: "
+                        f"{await poll_response.text()}"
+                    )
+                    output.success = False
+                    if pbar:
+                        pbar.update(1)
+                    return output
+
+                poll_json = await poll_response.json()
+                job_status = poll_json.get("status", job_status)
+
+                if time.perf_counter() >= deadline:
+                    output.error = (
+                        f"Timed out waiting for video job {job_id} to complete."
+                    )
+                    output.success = False
+                    if pbar:
+                        pbar.update(1)
+                    return output
+
+        if job_status == "failed":
+            output.error = f"Video job failed: {poll_json}"
+            output.success = False
+            if pbar:
+                pbar.update(1)
+            return output
+
+        # --- Extract metrics from poll response ---
+        # stage_durations is ``dict[str, float]`` which differs from the
+        # ``dict[str, dict]`` shape expected by _build_stage_metrics_from_outputs;
+        # skip for now — per-stage timing can be wired in a follow-up.
+        pm = poll_json.get("peak_memory_mb")
+        if isinstance(pm, (int, float)) and float(pm) > 0:
+            output.peak_memory_mb = float(pm)
+
+        # --- GET /v1/videos/{id}/content ---
+        content_url = f"{job_url}/content"
+        async with session.get(content_url, headers=headers) as content_response:
+            if content_response.status != 200:
+                output.error = (
+                    f"Content retrieval failed HTTP {content_response.status}: "
+                    f"{await content_response.text()}"
+                )
+                output.success = False
+                if pbar:
+                    pbar.update(1)
+                return output
+            await content_response.read()
+
+        output.success = True
+        output.latency = time.perf_counter() - st
+    except Exception:
+        output.success = False
+        output.error = traceback.format_exc()
+        logger.error(f"ERROR: send video request failed, reason is: {output.error}")
+    finally:
+        # Best-effort cleanup of the async job.
+        if job_id is not None:
+            try:
+                async with session.delete(f"{api_url}/{job_id}", headers=headers) as _:
+                    pass
+            except Exception:
+                pass
+
+    if pbar:
+        pbar.update(1)
+    return output
+
+
+def _add_video_input_reference_to_form(
+    form: aiohttp.FormData, image_input: Any, image_index: int
+) -> None:
+    """Add one image as ``input_reference`` to a ``/v1/videos`` multipart form."""
+    filename = f"benchmark_input_{image_index}.png"
+
+    if isinstance(image_input, dict) and "bytes" in image_input:
+        form.add_field(
+            "input_reference",
+            image_input["bytes"],
+            filename=filename,
+            content_type="image/png",
+        )
+        return
+
+    if isinstance(image_input, str):
+        if image_input.startswith("data:image"):
+            # Decode data-URL into raw bytes for file upload.
+            _, b64 = image_input.split(",", 1)
+            raw = base64.b64decode(b64, validate=True)
+            form.add_field(
+                "input_reference",
+                raw,
+                filename=filename,
+                content_type="application/octet-stream",
+            )
+            return
+        if image_input.startswith("http://") or image_input.startswith("https://"):
+            raise ValueError(
+                "Remote URLs are not supported for video input_reference; "
+                "use data URLs or local file paths."
+            )
+        # Local file path.
+        local_path = image_input.removeprefix("file://")
+        if not os.path.exists(local_path):
+            raise ValueError(f"Video input image not found: {local_path}")
+        mime = _guess_mime_type(local_path)
+        with open(local_path, "rb") as f:
+            form.add_field(
+                "input_reference",
+                f.read(),
+                filename=os.path.basename(local_path),
+                content_type=mime,
+            )
+        return
+
+    raise ValueError(
+        f"Unsupported video input image type: {type(image_input).__name__}"
+    )
+
+
 ASYNC_REQUEST_FUNCS["openai-chat-omni"] = async_request_openai_chat_omni_completions
 if "openai-chat-omni" not in OPENAI_COMPATIBLE_BACKENDS:
     OPENAI_COMPATIBLE_BACKENDS.append("openai-chat-omni")
@@ -1476,6 +1681,10 @@ if "openai-audio-speech" not in OPENAI_COMPATIBLE_BACKENDS:
 ASYNC_REQUEST_FUNCS["openai-image-edits-omni"] = async_request_openai_image_edits_omni
 if "openai-image-edits-omni" not in OPENAI_COMPATIBLE_BACKENDS:
     OPENAI_COMPATIBLE_BACKENDS.append("openai-image-edits-omni")
+
+ASYNC_REQUEST_FUNCS["openai-videos-omni"] = async_request_openai_videos_omni
+if "openai-videos-omni" not in OPENAI_COMPATIBLE_BACKENDS:
+    OPENAI_COMPATIBLE_BACKENDS.append("openai-videos-omni")
 
 # Daily-Omni backend for audio-visual reasoning benchmark
 # Reuses openai-chat-omni completions for video+text understanding

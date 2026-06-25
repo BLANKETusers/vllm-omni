@@ -148,6 +148,12 @@ _BENCHMARK_PASSTHROUGH_EXCLUDE_KEYS: frozenset[str] = frozenset(
         "random-mm-base-items-per-request",
         "num-input-images",
         "num_input_images",
+        "random-request-config",
+        "random_request_config",
+        "num_frames",
+        "num-frames",
+        "fps",
+        "backend",
     }
 )
 
@@ -760,8 +766,8 @@ def _resolve_benchmark_backend(endpoint: str) -> str:
     """Map endpoint to ``vllm bench serve --omni`` backend name."""
     if endpoint == "/v1/images/edits":
         return "openai-image-edits-omni"
-    # /v1/chat/completions and /v1/videos both use openai-chat-omni
-    # (video tasks use SSE streaming on the chat completions endpoint).
+    if endpoint == "/v1/videos":
+        return "openai-videos-omni"
     return "openai-chat-omni"
 
 
@@ -965,21 +971,43 @@ def _build_omni_benchmark_args(
     # Build extra-body JSON from diffusion-specific params.
     extra_body: dict[str, Any] = {}
 
+    # Flatten single-entry ``random-request-config`` into extra_body so that
+    # video benchmark configs whose parameterisation was a one-element list
+    # (e.g. test_wan22_i2v_vllm_omni.json) work with ``vllm bench serve``.
+    _VIDEO_PARAM_KEYS = {"width", "height", "num_inference_steps", "num_frames", "fps"}
+    rrc = params.get("random-request-config") or params.get("random_request_config")
+    if rrc is not None:
+        if isinstance(rrc, list) and len(rrc) == 1:
+            profile = rrc[0]
+            if isinstance(profile, dict):
+                for k in _VIDEO_PARAM_KEYS:
+                    v = profile.get(k) or profile.get(k.replace("_", "-"))
+                    if v is not None:
+                        extra_body[k] = v
+        elif isinstance(rrc, list) and len(rrc) > 1:
+            raise ValueError(
+                "Multi-profile random-request-config is not supported by "
+                "vllm bench serve.  Split each profile into its own "
+                "benchmark_params entry with a single-element list."
+            )
+
     # Map diffusion-specific params into extra-body.
     extra_body_keys = {
         "width",
         "height",
         "num_inference_steps",
+        "num_frames",
         "negative_prompt",
         "guidance_scale",
         "seed",
         "resolution",
+        "fps",
         "bot_task",
     }
     for key in extra_body_keys:
         # params may use hyphenated or underscore forms
         value = params.get(key) or params.get(key.replace("_", "-"))
-        if value is not None:
+        if value is not None and key not in extra_body:
             extra_body[key] = value
 
     # For image-generation tasks routed through the chat-completions endpoint,
