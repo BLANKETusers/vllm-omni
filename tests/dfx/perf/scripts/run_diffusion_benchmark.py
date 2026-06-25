@@ -146,6 +146,8 @@ _BENCHMARK_PASSTHROUGH_EXCLUDE_KEYS: frozenset[str] = frozenset(
         "ignore-eos",
         "ignore_eos",
         "random-mm-base-items-per-request",
+        "num-input-images",
+        "num_input_images",
     }
 )
 
@@ -918,7 +920,31 @@ def _build_omni_benchmark_args(
 
     # Suppress random multimodal content so requests are text-only,
     # matching the old RandomDataset behaviour from diffusion_benchmark_serving.py.
+    # For image-conditioned tasks (i2i, i2v, etc.) ``num-input-images`` overrides
+    # this default — see the mapping block below.
     args += ["--random-mm-base-items-per-request", "0"]
+
+    # Map legacy ``num-input-images`` (from diffusion_benchmark_serving.py) to
+    # ``random-mm-*`` knobs that ``vllm bench serve`` understands.
+    _IMAGE_CONDITIONED_TASKS = {"i2i", "i2v", "ti2v", "ti2i", "it2i"}
+    num_input_images = params.get("num-input-images") or params.get("num_input_images")
+    if num_input_images is not None:
+        task = params.get("task", "t2i")
+        if task not in _IMAGE_CONDITIONED_TASKS:
+            raise ValueError(
+                f"'num-input-images' is only valid for image-conditioned tasks "
+                f"({_IMAGE_CONDITIONED_TASKS}), got task={task}. "
+                f"Remove 'num-input-images' from the config or switch to the "
+                f"'random-mm-*' knobs directly."
+            )
+        # Override the default 0 with the actual item count.
+        idx = args.index("--random-mm-base-items-per-request")
+        args[idx + 1] = str(num_input_images)
+        # Cap per-request images to exactly N so the count is deterministic.
+        args += [
+            "--random-mm-limit-mm-per-prompt",
+            json.dumps({"image": num_input_images}),
+        ]
 
     # Forward random-input-len / random-output-len if present in config.
     for rl_key in ("random_input_len", "random-input-len"):
