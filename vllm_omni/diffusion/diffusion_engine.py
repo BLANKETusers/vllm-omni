@@ -410,9 +410,7 @@ class DiffusionEngine:
                         output = req_out.result.output
                         if self.od_config.enable_cpu_offload:
                             output = _move_tensor_tree_to_cpu(output)
-                        self._postproc_results[rid] = self._postproc_pool.submit(
-                            self._do_postprocess, rid, output
-                        )
+                        self._postproc_results[rid] = self._postproc_pool.submit(self._do_postprocess, rid, output)
 
             if self.od_config.streaming_output:
                 self._handle_step_streaming_runner_output(
