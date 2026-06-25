@@ -1491,8 +1491,14 @@ async def async_request_openai_videos_omni(
         form.add_field("prompt", str(request_func_input.prompt))
 
     _VIDEO_FORM_KEYS = (
-        "width", "height", "num_frames", "num_inference_steps",
-        "seed", "fps", "negative_prompt", "guidance_scale",
+        "width",
+        "height",
+        "num_frames",
+        "num_inference_steps",
+        "seed",
+        "fps",
+        "negative_prompt",
+        "guidance_scale",
     )
     for key in _VIDEO_FORM_KEYS:
         value = extra_body.get(key)
@@ -1549,10 +1555,7 @@ async def async_request_openai_videos_omni(
 
             async with session.get(job_url, headers=headers) as poll_response:
                 if poll_response.status != 200:
-                    output.error = (
-                        f"Polling failed HTTP {poll_response.status}: "
-                        f"{await poll_response.text()}"
-                    )
+                    output.error = f"Polling failed HTTP {poll_response.status}: {await poll_response.text()}"
                     output.success = False
                     if pbar:
                         pbar.update(1)
@@ -1562,9 +1565,7 @@ async def async_request_openai_videos_omni(
                 job_status = poll_json.get("status", job_status)
 
                 if time.perf_counter() >= deadline:
-                    output.error = (
-                        f"Timed out waiting for video job {job_id} to complete."
-                    )
+                    output.error = f"Timed out waiting for video job {job_id} to complete."
                     output.success = False
                     if pbar:
                         pbar.update(1)
@@ -1590,8 +1591,7 @@ async def async_request_openai_videos_omni(
         async with session.get(content_url, headers=headers) as content_response:
             if content_response.status != 200:
                 output.error = (
-                    f"Content retrieval failed HTTP {content_response.status}: "
-                    f"{await content_response.text()}"
+                    f"Content retrieval failed HTTP {content_response.status}: {await content_response.text()}"
                 )
                 output.success = False
                 if pbar:
@@ -1619,9 +1619,7 @@ async def async_request_openai_videos_omni(
     return output
 
 
-def _add_video_input_reference_to_form(
-    form: aiohttp.FormData, image_input: Any, image_index: int
-) -> None:
+def _add_video_input_reference_to_form(form: aiohttp.FormData, image_input: Any, image_index: int) -> None:
     """Add one image as ``input_reference`` to a ``/v1/videos`` multipart form."""
     filename = f"benchmark_input_{image_index}.png"
 
@@ -1648,8 +1646,7 @@ def _add_video_input_reference_to_form(
             return
         if image_input.startswith("http://") or image_input.startswith("https://"):
             raise ValueError(
-                "Remote URLs are not supported for video input_reference; "
-                "use data URLs or local file paths."
+                "Remote URLs are not supported for video input_reference; use data URLs or local file paths."
             )
         # Local file path.
         local_path = image_input.removeprefix("file://")
@@ -1665,9 +1662,7 @@ def _add_video_input_reference_to_form(
             )
         return
 
-    raise ValueError(
-        f"Unsupported video input image type: {type(image_input).__name__}"
-    )
+    raise ValueError(f"Unsupported video input image type: {type(image_input).__name__}")
 
 
 ASYNC_REQUEST_FUNCS["openai-chat-omni"] = async_request_openai_chat_omni_completions
