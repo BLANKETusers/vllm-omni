@@ -164,15 +164,6 @@ class DiffusionEngine:
         else:
             self.execute_fn = self.executor.execute_request
 
-        # Thread pool for CPU postprocessing (denormalize + .cpu() → numpy → PIL).
-        # Postprocess is submitted here by the busy_loop BEFORE setting the
-        # asyncio future so that the next request's GPU work can start
-        # immediately while postprocess runs in a separate thread.
-        self._postproc_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="diff_pp")
-        # request_id → Future[postprocessed_data]
-        # Populated by _busy_loop, consumed by step().
-        self._postproc_results: dict[str, concurrent.futures.Future] = {}
-
         try:
             self._dummy_run()
         except Exception as e:
@@ -277,22 +268,11 @@ class DiffusionEngine:
         if action_only_output:
             outputs = []
         elif self.post_process_func is not None:
-            # Check whether the busy_loop already submitted this request's
-            # postprocess to the thread pool (models whose post_process_func
-            # does NOT require per-request sampling_params).
-            pp_fut = self._postproc_results.pop(request.request_id, None)
-            if pp_fut is not None:
-                # Thread-pool path: postprocess has been running in parallel
-                # with the next request's GPU work since the busy_loop
-                # submitted it before setting the future.
-                outputs = pp_fut.result()
-            elif self._post_process_accepts_sampling_params:
-                # Synchronous path for video / advanced pipelines that need
-                # request-level sampling_params (e.g. frame interpolation).
+            # Some video pipelines need request-level controls during
+            # postprocess (for example worker-side frame interpolation).
+            if self._post_process_accepts_sampling_params:
                 outputs = self.post_process_func(output_data, sampling_params=request.sampling_params)
             else:
-                # Fallback: thread-pool submission was skipped or failed;
-                # run synchronously to guarantee correctness.
                 outputs = self.post_process_func(output_data)
         else:
             outputs = output_data
@@ -398,20 +378,6 @@ class DiffusionEngine:
             self._process_aborts_queue()
             self._process_rpc_queue()
             finished_req_ids = self.scheduler.update_from_output(sched_output, runner_output)
-            # Submit CPU postprocess to thread pool BEFORE setting futures.
-            # This lets the busy_loop start the next request's GPU work
-            # immediately while postprocess runs in a separate thread.
-            # Skip thread-pool offload when the post_process_func needs
-            # per-request sampling_params (e.g. video frame interpolation).
-            if self.post_process_func is not None and not self._post_process_accepts_sampling_params:
-                for rid in finished_req_ids:
-                    req_out = runner_output.get_request_output(rid)
-                    if req_out is not None and req_out.result is not None and req_out.result.output is not None:
-                        output = req_out.result.output
-                        if self.od_config.enable_cpu_offload:
-                            output = _move_tensor_tree_to_cpu(output)
-                        self._postproc_results[rid] = self._postproc_pool.submit(self._do_postprocess, rid, output)
-
             if self.od_config.streaming_output:
                 self._handle_step_streaming_runner_output(
                     finished_req_ids,
@@ -475,17 +441,6 @@ class DiffusionEngine:
                 return
             if not task.future.done():
                 task.future.set_exception(exc)
-
-    def _do_postprocess(self, request_id: str, output_data: Any) -> Any:
-        """Execute post_process_func in the thread pool.
-
-        Called from the busy_loop thread via ThreadPoolExecutor so that CPU
-        postprocessing (denormalize → .cpu() → numpy → PIL) runs in parallel
-        with the next request's GPU work.
-        """
-        if self.post_process_func is None:
-            return output_data
-        return self.post_process_func(output_data)
 
     def _handle_finished_requests(
         self,
@@ -927,10 +882,6 @@ class DiffusionEngine:
 
         self.scheduler.close()
         self.executor.shutdown()
-        # Shut down the postprocess thread pool. wait=False so any still-running
-        # tasks are abandoned (the engine is shutting down anyway).
-        if hasattr(self, "_postproc_pool"):
-            self._postproc_pool.shutdown(wait=False)
         self._shutdown_complete = True
 
     def abort(self, request_id: str | Iterable[str]) -> None:
