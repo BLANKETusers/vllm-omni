@@ -407,8 +407,11 @@ class DiffusionEngine:
                 for rid in finished_req_ids:
                     req_out = runner_output.get_request_output(rid)
                     if req_out is not None and req_out.result is not None and req_out.result.output is not None:
+                        output = req_out.result.output
+                        if self.od_config.enable_cpu_offload:
+                            output = _move_tensor_tree_to_cpu(output)
                         self._postproc_results[rid] = self._postproc_pool.submit(
-                            self._do_postprocess, rid, req_out.result.output
+                            self._do_postprocess, rid, output
                         )
 
             if self.od_config.streaming_output:
