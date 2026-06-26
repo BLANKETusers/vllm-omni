@@ -25,13 +25,13 @@ from vllm_omni.diffusion.data import (
     OmniDiffusionConfig,
 )
 from vllm_omni.diffusion.executor.abstract import DiffusionExecutor
-from vllm_omni.diffusion.ipc import resolve_deferred_outputs
 from vllm_omni.diffusion.io_support import (
     get_dummy_run_num_frames,
     image_color_format,
     supports_audio_output,
     supports_multimodal_input,
 )
+from vllm_omni.diffusion.ipc import resolve_deferred_outputs
 from vllm_omni.diffusion.output_formatter import (
     DiffusionStepTimings,
     format_diffusion_outputs,
