@@ -12,7 +12,6 @@ import gc
 import multiprocessing as mp
 import os
 import signal
-import threading
 import traceback
 from collections.abc import Iterable, Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
@@ -43,12 +42,7 @@ from vllm_omni.diffusion.distributed.parallel_state import (
     initialize_model_parallel,
 )
 from vllm_omni.diffusion.forward_context import set_forward_context
-from vllm_omni.diffusion.ipc import (
-    DIFFUSION_RPC_RESULT_ENVELOPE,
-    _fill_deferred_handles,
-    pack_diffusion_output_shm,
-    pack_diffusion_output_shm_deferred,
-)
+from vllm_omni.diffusion.ipc import DIFFUSION_RPC_RESULT_ENVELOPE, pack_diffusion_output_shm
 from vllm_omni.diffusion.lora.manager import DiffusionLoRAManager
 from vllm_omni.diffusion.registry import get_diffusion_ir_op_priority_func
 from vllm_omni.diffusion.request import OmniDiffusionRequest
@@ -681,9 +675,6 @@ class CustomPipelineWorkerExtension:
         self.init_lora_manager()
 
 
-_DEFERRED_SHM_MODELS = {"HunyuanImage3Pipeline", "HunyuanImage3ForCausalMM"}
-
-
 class WorkerProc:
     """Wrapper that runs one Worker in a separate process."""
 
@@ -752,23 +743,12 @@ class WorkerProc:
             if isinstance(output, OmniACK):
                 self.result_mq.enqueue(output)
                 return
-            is_deferred_model = self.od_config.model_class_name in _DEFERRED_SHM_MODELS
-            if is_deferred_model and isinstance(output, DiffusionOutput):
-                deferred = pack_diffusion_output_shm_deferred(output)
-                self.result_mq.enqueue(output)
-                # Fill in background so enqueue is never blocked by D2H.
-                threading.Thread(
-                    target=_fill_deferred_handles,
-                    args=(deferred,),
-                    daemon=True,
-                ).start()
-            else:
-                try:
-                    pack_diffusion_output_shm(output)
-                except Exception as e:
-                    if hasattr(output, "output"):
-                        logger.warning("SHM pack failed for model output: %s", e)
-                self.result_mq.enqueue(output)
+            try:
+                pack_diffusion_output_shm(output)
+            except Exception as e:
+                if hasattr(output, "output"):
+                    logger.warning("SHM pack failed for model output: %s", e)
+            self.result_mq.enqueue(output)
 
     def recv_message(self):
         """Receive messages from broadcast queue."""
