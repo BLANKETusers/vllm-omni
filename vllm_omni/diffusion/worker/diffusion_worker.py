@@ -754,11 +754,23 @@ class WorkerProc:
                 return
             is_deferred_model = self.od_config.model_class_name in _DEFERRED_SHM_MODELS
             if is_deferred_model and isinstance(output, DiffusionOutput):
-                deferred = pack_diffusion_output_shm_deferred(output)
+                try:
+                    deferred = pack_diffusion_output_shm_deferred(output)
+                except Exception as e:
+                    logger.warning("Deferred SHM pack failed, falling back to sync: %s", e)
+                    try:
+                        pack_diffusion_output_shm(output)
+                    except Exception as e2:
+                        if hasattr(output, "output"):
+                            logger.warning("SHM pack failed for model output: %s", e2)
+                    self.result_mq.enqueue(output)
+                    return
                 # Record an event on the default stream so the background
                 # thread's side-stream D2H copy waits for the producer.
-                gpu_event = torch.cuda.Event()
-                gpu_event.record()
+                gpu_event = None
+                if torch.cuda.is_available():
+                    gpu_event = torch.cuda.Event()
+                    gpu_event.record()
                 self.result_mq.enqueue(output)
                 # Fill in background so enqueue is never blocked by D2H.
                 threading.Thread(

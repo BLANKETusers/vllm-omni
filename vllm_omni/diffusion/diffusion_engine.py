@@ -265,6 +265,12 @@ class DiffusionEngine:
         # Resolve deferred SHM handles — blocking is fine here because step()
         # runs in the async main thread, not in _busy_loop.
         output_data = resolve_deferred_outputs(output_data)
+        if output.trajectory_latents is not None:
+            output.trajectory_latents = resolve_deferred_outputs(output.trajectory_latents)
+        if output.trajectory_timesteps is not None:
+            output.trajectory_timesteps = resolve_deferred_outputs(output.trajectory_timesteps)
+        if output.trajectory_log_probs is not None:
+            output.trajectory_log_probs = resolve_deferred_outputs(output.trajectory_log_probs)
         action_payload = None
         action_only_output = bool(custom_output.get("action_only_output"))
 

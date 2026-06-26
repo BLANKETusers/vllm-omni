@@ -14,8 +14,11 @@ from __future__ import annotations
 from typing import Any
 
 import torch
+from vllm.logger import init_logger
 
 from vllm_omni.diffusion.data import DiffusionOutput
+
+logger = init_logger(__name__)
 
 _SHM_TENSOR_THRESHOLD = 1_000_000  # 1 MB
 DIFFUSION_RPC_RESULT_ENVELOPE = "diffusion_rpc_result"
@@ -192,6 +195,8 @@ def _resolve_deferred_shm(handle: dict[str, Any]) -> torch.Tensor:
         try:
             if ready_shm.buf[0] == 1:
                 break
+            if ready_shm.buf[0] == 2:
+                raise RuntimeError(f"Deferred SHM '{handle['name']}' fill failed on worker")
         finally:
             ready_shm.close()
         if time.monotonic() > deadline:
@@ -274,17 +279,11 @@ def _pack_diffusion_fields_deferred(
     if output.output is not None:
         output.output = _pack_value_deferred(output.output, deferred_items)
     if output.trajectory_latents is not None and isinstance(output.trajectory_latents, torch.Tensor):
-        handle = _pack_tensor_deferred(output.trajectory_latents)
-        deferred_items.append((handle, output.trajectory_latents))
-        output.trajectory_latents = handle
+        output.trajectory_latents = _pack_value_deferred(output.trajectory_latents, deferred_items)
     if output.trajectory_timesteps is not None and isinstance(output.trajectory_timesteps, torch.Tensor):
-        handle = _pack_tensor_deferred(output.trajectory_timesteps)
-        deferred_items.append((handle, output.trajectory_timesteps))
-        output.trajectory_timesteps = handle
+        output.trajectory_timesteps = _pack_value_deferred(output.trajectory_timesteps, deferred_items)
     if output.trajectory_log_probs is not None and isinstance(output.trajectory_log_probs, torch.Tensor):
-        handle = _pack_tensor_deferred(output.trajectory_log_probs)
-        deferred_items.append((handle, output.trajectory_log_probs))
-        output.trajectory_log_probs = handle
+        output.trajectory_log_probs = _pack_value_deferred(output.trajectory_log_probs, deferred_items)
     return deferred_items
 
 
@@ -307,13 +306,37 @@ def pack_diffusion_output_shm_deferred(
     return []
 
 
+def _signal_deferred_error(handle: dict[str, Any]) -> None:
+    """Signal consumer that a deferred SHM fill failed.
+
+    Sets the ready flag to 2 (error) so the consumer can fail fast instead
+    of waiting for the 30 s timeout.  Best-effort — must not raise.
+    """
+    from multiprocessing import shared_memory
+
+    try:
+        ready_shm = shared_memory.SharedMemory(name=handle["ready_name"])
+        ready_shm.buf[0] = 2
+        ready_shm.close()
+    except Exception:
+        pass
+
+
 def _fill_deferred_handles(
     items: list[tuple[dict[str, Any], torch.Tensor]],
     gpu_event: torch.cuda.Event | None = None,
 ) -> None:
     """Fill all deferred SHM handles (called from worker background thread)."""
     for handle, tensor in items:
-        _fill_deferred_shm(handle, tensor, gpu_event=gpu_event)
+        try:
+            _fill_deferred_shm(handle, tensor, gpu_event=gpu_event)
+        except Exception:
+            logger.exception(
+                "Deferred SHM fill failed for handle '%s'; signalling error to consumer",
+                handle.get("name", "unknown"),
+            )
+            # Signal error (2) so the consumer does not hang for 30 s.
+            _signal_deferred_error(handle)
 
 
 def _pack_tensor_if_large(val: torch.Tensor) -> torch.Tensor | dict:
