@@ -332,7 +332,7 @@ def get_hunyuan_image_3_pre_process_func(od_config: OmniDiffusionConfig):
     return pre_process_func
 
 
-def get_hunyuan_image3_post_process(od_config: OmniDiffusionConfig):
+def get_hunyuan_image3_post_process_func(od_config: OmniDiffusionConfig):
     """GPU tensor → PIL, runs outside pipeline_forward to overlap with next request."""
     from diffusers.image_processor import VaeImageProcessor
 

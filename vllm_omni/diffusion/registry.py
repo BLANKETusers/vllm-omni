@@ -514,7 +514,7 @@ _DIFFUSION_POST_PROCESS_FUNCS = {
     "Flux2Pipeline": "get_flux2_post_process_func",
     "HunyuanVideo15Pipeline": "get_hunyuan_video_15_post_process_func",
     "HunyuanVideo15ImageToVideoPipeline": "get_hunyuan_video_15_i2v_post_process_func",
-    "HunyuanImage3Pipeline": "get_hunyuan_image3_post_process",
+    "HunyuanImage3Pipeline": "get_hunyuan_image3_post_process_func",
     "MagiHumanPipeline": "get_magi_human_post_process_func",
     "OmniVoicePipeline": "get_omnivoice_post_process_func",
     "DreamIDOmniPipeline": "get_dreamid_omni_post_process_func",
@@ -522,7 +522,7 @@ _DIFFUSION_POST_PROCESS_FUNCS = {
     "Cosmos3OmniDiffusersPipeline": "get_cosmos3_post_process_func",
     "HiDreamImagePipeline": "get_hidream_image_post_process_func",
     "StableDiffusionXLPipeline": "get_sdxl_image_post_process_func",
-    "HunyuanImage3ForCausalMM": "get_hunyuan_image3_post_process",
+    "HunyuanImage3ForCausalMM": "get_hunyuan_image3_post_process_func",
 }
 
 _DIFFUSION_ACTION_POST_PROCESS_FUNCS = {
