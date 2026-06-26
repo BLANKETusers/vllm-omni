@@ -79,6 +79,236 @@ def _tensor_from_shm(handle: dict[str, Any]) -> torch.Tensor:
     return tensor
 
 
+# ------------------------------------------------------------------
+# Deferred SHM: create empty SHM shell, enqueue immediately, fill .cpu() data
+# in a background thread so the engine _busy_loop can start the next request's
+# GPU work without waiting for D2H transfer.
+# ------------------------------------------------------------------
+
+
+def _create_deferred_shm(tensor: torch.Tensor) -> dict[str, Any]:
+    """Create an empty SHM shell + ready flag, return a deferred handle.
+
+    The caller enqueues this handle immediately and fills the SHM in a
+    background thread via ``_fill_deferred_shm``.  The engine resolves
+    the handle to a tensor via ``_resolve_deferred_shm``.
+    """
+    from multiprocessing import shared_memory
+
+    original_dtype = tensor.dtype
+    if original_dtype == torch.bfloat16:
+        nbytes = tensor.nelement() * 4  # promoted to float32
+        numpy_dtype = "float32"
+    else:
+        nbytes = tensor.nelement() * tensor.element_size()
+        numpy_dtype = str(torch.zeros(1, dtype=original_dtype).numpy().dtype)
+
+    shm = shared_memory.SharedMemory(create=True, size=nbytes)
+    shm.close()
+
+    # 1-byte ready flag shared memory (0 = pending, 1 = filled)
+    ready_shm = shared_memory.SharedMemory(create=True, size=1)
+    ready_shm.buf[0] = 0
+    ready_shm.close()
+
+    return {
+        "__tensor_shm_deferred__": True,
+        "name": shm.name,
+        "ready_name": ready_shm.name,
+        "shape": list(tensor.shape),
+        "torch_dtype": str(original_dtype),
+        "numpy_dtype": numpy_dtype,
+        "nbytes": nbytes,
+    }
+
+
+def _fill_deferred_shm(handle: dict[str, Any], tensor: torch.Tensor) -> None:
+    """Fill a deferred SHM segment with ``.cpu()`` tensor data in a worker thread."""
+    from multiprocessing import shared_memory
+
+    import numpy as np
+
+    tensor = tensor.detach().cpu().contiguous()
+    original_dtype = tensor.dtype
+    if original_dtype == torch.bfloat16:
+        tensor = tensor.to(torch.float32)
+    arr = tensor.numpy()
+
+    shm = shared_memory.SharedMemory(name=handle["name"])
+    try:
+        shm_arr = np.ndarray(arr.shape, dtype=arr.dtype, buffer=shm.buf[: handle["nbytes"]])
+        np.copyto(shm_arr, arr)
+    finally:
+        shm.close()
+
+    # Signal ready
+    ready_shm = shared_memory.SharedMemory(name=handle["ready_name"])
+    ready_shm.buf[0] = 1
+    ready_shm.close()
+
+
+def _is_deferred_handle(val: object) -> bool:
+    """Return True if *val* is a deferred SHM handle dict."""
+    return isinstance(val, dict) and bool(val.get("__tensor_shm_deferred__"))
+
+
+def _resolve_deferred_shm(handle: dict[str, Any]) -> torch.Tensor:
+    """Block until a deferred SHM segment is filled, then reconstruct the tensor.
+
+    Called from the engine async thread (``step()`` / ``postprocess_output``),
+    **not** from ``_busy_loop``, so blocking here does not stall GPU scheduling.
+    """
+    import time
+    from multiprocessing import shared_memory
+
+    import numpy as np
+
+    deadline = time.monotonic() + 30.0
+    while True:
+        try:
+            ready_shm = shared_memory.SharedMemory(name=handle["ready_name"])
+        except FileNotFoundError:
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"Deferred SHM '{handle['name']}' not ready after 30 s")
+            time.sleep(0.001)
+            continue
+        try:
+            if ready_shm.buf[0] == 1:
+                break
+        finally:
+            ready_shm.close()
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"Deferred SHM '{handle['name']}' not ready after 30 s")
+        time.sleep(0.001)
+
+    shm = shared_memory.SharedMemory(name=handle["name"])
+    try:
+        np_dtype = np.dtype(handle["numpy_dtype"])
+        arr = np.ndarray(handle["shape"], dtype=np_dtype, buffer=shm.buf[: handle["nbytes"]])
+        tensor = torch.from_numpy(arr.copy())
+        torch_dtype_str = handle.get("torch_dtype", "")
+        if torch_dtype_str:
+            original_dtype = getattr(torch, torch_dtype_str.replace("torch.", ""), None)
+            if original_dtype is not None and tensor.dtype != original_dtype:
+                tensor = tensor.to(original_dtype)
+    finally:
+        shm.close()
+        shm.unlink()
+
+    # Clean up the ready-flag SHM
+    try:
+        ready_shm = shared_memory.SharedMemory(name=handle["ready_name"])
+        ready_shm.close()
+        ready_shm.unlink()
+    except FileNotFoundError:
+        pass
+
+    return tensor
+
+
+def _resolve_deferred_tree(val: object) -> object:
+    """Recursively resolve deferred SHM handles, mirroring ``_unpack_if_shm_handle``."""
+    if _is_deferred_handle(val):
+        return _resolve_deferred_shm(val)
+    if isinstance(val, dict):
+        return {key: _resolve_deferred_tree(value) for key, value in val.items()}
+    if isinstance(val, list):
+        return [_resolve_deferred_tree(item) for item in val]
+    if isinstance(val, tuple):
+        return tuple(_resolve_deferred_tree(item) for item in val)
+    return val
+
+
+def resolve_deferred_outputs(output_data: object) -> object:
+    """Resolve any deferred SHM handles in *output_data* tree before postprocess."""
+    return _resolve_deferred_tree(output_data)
+
+
+def _pack_tensor_deferred(val: torch.Tensor) -> dict:
+    """Always pack tensor as a deferred SHM handle (no D2H here)."""
+    return _create_deferred_shm(val)
+
+
+def _pack_value_deferred(
+    val: object,
+    deferred_items: list[tuple[dict[str, Any], torch.Tensor]],
+) -> object:
+    """Recursively replace tensors with deferred SHM handles.
+
+    Populates *deferred_items* with ``(handle, tensor)`` pairs that a
+    background thread later fills via ``_fill_deferred_shm``.
+    """
+    if isinstance(val, torch.Tensor):
+        if val.nelement() * val.element_size() > _SHM_TENSOR_THRESHOLD:
+            handle = _pack_tensor_deferred(val)
+            deferred_items.append((handle, val))
+            return handle
+        return val
+    if isinstance(val, dict):
+        return {key: _pack_value_deferred(value, deferred_items) for key, value in val.items()}
+    if isinstance(val, list):
+        return [_pack_value_deferred(item, deferred_items) for item in val]
+    if isinstance(val, tuple):
+        return tuple(_pack_value_deferred(item, deferred_items) for item in val)
+    return val
+
+
+def _pack_diffusion_fields_deferred(
+    output: DiffusionOutput,
+) -> list[tuple[dict[str, Any], torch.Tensor]]:
+    """Replace large tensor fields with deferred SHM handles.
+
+    Returns a list of ``(handle, tensor)`` that must be filled in a
+    background thread via ``_fill_deferred_shm``.
+    """
+    deferred_items: list[tuple[dict[str, Any], torch.Tensor]] = []
+    if output.output is not None:
+        output.output = _pack_value_deferred(output.output, deferred_items)
+    if output.trajectory_latents is not None and isinstance(output.trajectory_latents, torch.Tensor):
+        handle = _pack_tensor_deferred(output.trajectory_latents)
+        deferred_items.append((handle, output.trajectory_latents))
+        output.trajectory_latents = handle
+    if output.trajectory_timesteps is not None and isinstance(output.trajectory_timesteps, torch.Tensor):
+        handle = _pack_tensor_deferred(output.trajectory_timesteps)
+        deferred_items.append((handle, output.trajectory_timesteps))
+        output.trajectory_timesteps = handle
+    if output.trajectory_log_probs is not None and isinstance(output.trajectory_log_probs, torch.Tensor):
+        handle = _pack_tensor_deferred(output.trajectory_log_probs)
+        deferred_items.append((handle, output.trajectory_log_probs))
+        output.trajectory_log_probs = handle
+    return deferred_items
+
+
+def pack_diffusion_output_shm_deferred(
+    output: object,
+) -> list[tuple[dict[str, Any], torch.Tensor]]:
+    """Like ``pack_diffusion_output_shm`` but all large tensors get deferred handles.
+
+    Returns ``(handle, tensor)`` pairs for background filling.
+    """
+    if isinstance(output, DiffusionOutput):
+        return _pack_diffusion_fields_deferred(output)
+
+    if _is_rpc_result_envelope(output):
+        result = output.get("result")
+        if isinstance(result, DiffusionOutput):
+            return _pack_diffusion_fields_deferred(result)
+
+    result = getattr(output, "result", None)
+    if isinstance(result, DiffusionOutput):
+        return _pack_diffusion_fields_deferred(result)
+
+    return []
+
+
+def _fill_deferred_handles(
+    items: list[tuple[dict[str, Any], torch.Tensor]],
+) -> None:
+    """Fill all deferred SHM handles (called from worker background thread)."""
+    for handle, tensor in items:
+        _fill_deferred_shm(handle, tensor)
+
+
 def _pack_tensor_if_large(val: torch.Tensor) -> torch.Tensor | dict:
     """Replace a tensor with an SHM handle if it exceeds the threshold."""
     if val.nelement() * val.element_size() > _SHM_TENSOR_THRESHOLD:
@@ -107,7 +337,14 @@ def _pack_value_if_large(val: object) -> object:
 
 
 def _unpack_if_shm_handle(val: object) -> object:
-    """Reconstruct tensors from SHM handles, mirroring ``_pack_value_if_large``."""
+    """Reconstruct tensors from SHM handles, mirroring ``_pack_value_if_large``.
+
+    Deferred handles (``__tensor_shm_deferred__``) are left as-is so
+    ``_busy_loop`` can pass through immediately.  They are resolved
+    later in the engine async thread via ``resolve_deferred_outputs``.
+    """
+    if isinstance(val, dict) and val.get("__tensor_shm_deferred__"):
+        return val  # resolve later in step() → postprocess_output
     if isinstance(val, dict) and val.get("__tensor_shm__"):
         return _tensor_from_shm(val)
     if isinstance(val, dict):

@@ -25,6 +25,7 @@ from vllm_omni.diffusion.data import (
     OmniDiffusionConfig,
 )
 from vllm_omni.diffusion.executor.abstract import DiffusionExecutor
+from vllm_omni.diffusion.ipc import resolve_deferred_outputs
 from vllm_omni.diffusion.io_support import (
     get_dummy_run_num_frames,
     image_color_format,
@@ -261,6 +262,11 @@ class DiffusionEngine:
             output_data = _move_tensor_tree_to_cpu(output_data)
 
         custom_output = output.custom_output or {}
+        # Resolve deferred SHM handles (HunyuanImage3 async D2H path) —
+        # the handle is a dict that must be turned back into a tensor
+        # before postprocess.  Blocking here is fine: step() runs in the
+        # async main thread, not in _busy_loop.
+        output_data = resolve_deferred_outputs(output_data)
         action_payload = None
         action_only_output = bool(custom_output.get("action_only_output"))
 
