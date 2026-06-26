@@ -2238,7 +2238,7 @@ class HunyuanImage3Pipeline(
         if hasattr(self.vae, "ffactor_temporal"):
             assert image.shape[2] == 1, "image should have shape [B, C, T, H, W] and T should be 1"
             image = image.squeeze(2)
-        # Postprocess deferred to engine post_process_func (same as pipeline_forward).
+        # Postprocess deferred to engine post_process_func for overlap with next request.
 
         cot_text_list = state.extra.get(_STEP_COT_TEXT_LIST) or []
         custom_output = {}

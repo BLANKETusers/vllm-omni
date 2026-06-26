@@ -79,20 +79,12 @@ def _tensor_from_shm(handle: dict[str, Any]) -> torch.Tensor:
     return tensor
 
 
-# ------------------------------------------------------------------
-# Deferred SHM: create empty SHM shell, enqueue immediately, fill .cpu() data
-# in a background thread so the engine _busy_loop can start the next request's
-# GPU work without waiting for D2H transfer.
-# ------------------------------------------------------------------
+# Deferred SHM: enqueue empty shell, fill in background thread so _busy_loop
+# can start next request's GPU work without waiting for D2H.
 
 
 def _create_deferred_shm(tensor: torch.Tensor) -> dict[str, Any]:
-    """Create an empty SHM shell + ready flag, return a deferred handle.
-
-    The caller enqueues this handle immediately and fills the SHM in a
-    background thread via ``_fill_deferred_shm``.  The engine resolves
-    the handle to a tensor via ``_resolve_deferred_shm``.
-    """
+    """Create an empty SHM shell + ready flag for deferred D2H."""
     from multiprocessing import shared_memory
 
     original_dtype = tensor.dtype
@@ -106,7 +98,7 @@ def _create_deferred_shm(tensor: torch.Tensor) -> dict[str, Any]:
     shm = shared_memory.SharedMemory(create=True, size=nbytes)
     shm.close()
 
-    # 1-byte ready flag shared memory (0 = pending, 1 = filled)
+    # 1-byte ready flag SHM (0=pending, 1=filled)
     ready_shm = shared_memory.SharedMemory(create=True, size=1)
     ready_shm.buf[0] = 0
     ready_shm.close()
@@ -123,32 +115,26 @@ def _create_deferred_shm(tensor: torch.Tensor) -> dict[str, Any]:
 
 
 def _fill_deferred_shm(handle: dict[str, Any], tensor: torch.Tensor) -> None:
-    """Fill a deferred SHM segment with tensor data in a worker background thread.
-
-    Uses a dedicated CUDA stream + pinned memory so the D2H transfer never
-    serialises with the default stream where the next request's forward runs.
-    """
+    """Fill deferred SHM via side CUDA stream + pinned memory (no default-stream sync)."""
     from multiprocessing import shared_memory
 
     import numpy as np
 
     original_dtype = tensor.dtype
     if tensor.is_cuda:
-        # Pinned CPU staging buffer — DMA can write directly, no pageable copy.
+        # Pinned staging buffer + side stream: D2H never blocks the default stream.
         cpu_buf = torch.empty(tensor.shape, dtype=original_dtype, pin_memory=True)
-        # D2H on a side stream leaves the default stream free for the next
-        # request's GPU kernels.
         d2h_stream = torch.cuda.Stream()
         with torch.cuda.stream(d2h_stream):
             cpu_buf.copy_(tensor.detach(), non_blocking=True)
             event = d2h_stream.record_event()
-        # Block only on the side stream, NOT on the default stream.
+        # Synchronize only the side stream, not the default stream.
         event.synchronize()
         del d2h_stream
     else:
         cpu_buf = tensor.detach().cpu()
 
-    # Promote bfloat16 to float32 for NumPy compatibility.
+    # Promote bfloat16 to float32 for NumPy.
     if original_dtype == torch.bfloat16:
         cpu_buf = cpu_buf.to(torch.float32)
 
@@ -161,7 +147,7 @@ def _fill_deferred_shm(handle: dict[str, Any], tensor: torch.Tensor) -> None:
     finally:
         shm.close()
 
-    # Signal ready
+    # Signal: data is ready.
     ready_shm = shared_memory.SharedMemory(name=handle["ready_name"])
     ready_shm.buf[0] = 1
     ready_shm.close()
@@ -173,11 +159,7 @@ def _is_deferred_handle(val: object) -> bool:
 
 
 def _resolve_deferred_shm(handle: dict[str, Any]) -> torch.Tensor:
-    """Block until a deferred SHM segment is filled, then reconstruct the tensor.
-
-    Called from the engine async thread (``step()`` / ``postprocess_output``),
-    **not** from ``_busy_loop``, so blocking here does not stall GPU scheduling.
-    """
+    """Block until deferred SHM is filled, then reconstruct the tensor."""
     import time
     from multiprocessing import shared_memory
 
@@ -215,7 +197,7 @@ def _resolve_deferred_shm(handle: dict[str, Any]) -> torch.Tensor:
         shm.close()
         shm.unlink()
 
-    # Clean up the ready-flag SHM
+    # Clean up the ready-flag SHM.
     try:
         ready_shm = shared_memory.SharedMemory(name=handle["ready_name"])
         ready_shm.close()
@@ -253,11 +235,7 @@ def _pack_value_deferred(
     val: object,
     deferred_items: list[tuple[dict[str, Any], torch.Tensor]],
 ) -> object:
-    """Recursively replace tensors with deferred SHM handles.
-
-    Populates *deferred_items* with ``(handle, tensor)`` pairs that a
-    background thread later fills via ``_fill_deferred_shm``.
-    """
+    """Recursively replace large tensors with deferred SHM handles."""
     if isinstance(val, torch.Tensor):
         if val.nelement() * val.element_size() > _SHM_TENSOR_THRESHOLD:
             handle = _pack_tensor_deferred(val)
@@ -276,11 +254,7 @@ def _pack_value_deferred(
 def _pack_diffusion_fields_deferred(
     output: DiffusionOutput,
 ) -> list[tuple[dict[str, Any], torch.Tensor]]:
-    """Replace large tensor fields with deferred SHM handles.
-
-    Returns a list of ``(handle, tensor)`` that must be filled in a
-    background thread via ``_fill_deferred_shm``.
-    """
+    """Replace large tensor fields in DiffusionOutput with deferred SHM handles."""
     deferred_items: list[tuple[dict[str, Any], torch.Tensor]] = []
     if output.output is not None:
         output.output = _pack_value_deferred(output.output, deferred_items)
@@ -302,10 +276,7 @@ def _pack_diffusion_fields_deferred(
 def pack_diffusion_output_shm_deferred(
     output: object,
 ) -> list[tuple[dict[str, Any], torch.Tensor]]:
-    """Like ``pack_diffusion_output_shm`` but all large tensors get deferred handles.
-
-    Returns ``(handle, tensor)`` pairs for background filling.
-    """
+    """Deferred SHM variant of pack_diffusion_output_shm; returns (handle, tensor) pairs."""
     if isinstance(output, DiffusionOutput):
         return _pack_diffusion_fields_deferred(output)
 
@@ -357,14 +328,9 @@ def _pack_value_if_large(val: object) -> object:
 
 
 def _unpack_if_shm_handle(val: object) -> object:
-    """Reconstruct tensors from SHM handles, mirroring ``_pack_value_if_large``.
-
-    Deferred handles (``__tensor_shm_deferred__``) are left as-is so
-    ``_busy_loop`` can pass through immediately.  They are resolved
-    later in the engine async thread via ``resolve_deferred_outputs``.
-    """
+    """Reconstruct tensors from SHM handles; deferred handles pass through for later resolve."""
     if isinstance(val, dict) and val.get("__tensor_shm_deferred__"):
-        return val  # resolve later in step() → postprocess_output
+        return val  # resolved later in step() → postprocess_output
     if isinstance(val, dict) and val.get("__tensor_shm__"):
         return _tensor_from_shm(val)
     if isinstance(val, dict):

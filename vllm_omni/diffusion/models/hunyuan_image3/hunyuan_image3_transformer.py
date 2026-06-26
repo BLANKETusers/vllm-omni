@@ -3235,8 +3235,7 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
             assert image.shape[2] == 1, "image should have shape [B, C, T, H, W] and T should be 1"
             image = image.squeeze(2)
 
-        # Denormalize and CPU→PIL conversion moved to engine post_process_func
-        # for overlap with the next request's GPU work.
+        # Denormalize + PIL moved to engine post_process_func for overlap with next request.
 
         if not return_dict:
             return (image,)
