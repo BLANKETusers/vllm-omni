@@ -755,11 +755,15 @@ class WorkerProc:
             is_deferred_model = self.od_config.model_class_name in _DEFERRED_SHM_MODELS
             if is_deferred_model and isinstance(output, DiffusionOutput):
                 deferred = pack_diffusion_output_shm_deferred(output)
+                # Record an event on the default stream so the background
+                # thread's side-stream D2H copy waits for the producer.
+                gpu_event = torch.cuda.Event()
+                gpu_event.record()
                 self.result_mq.enqueue(output)
                 # Fill in background so enqueue is never blocked by D2H.
                 threading.Thread(
                     target=_fill_deferred_handles,
-                    args=(deferred,),
+                    args=(deferred, gpu_event),
                     daemon=True,
                 ).start()
             else:

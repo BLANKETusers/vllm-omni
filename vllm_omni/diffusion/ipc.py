@@ -114,8 +114,19 @@ def _create_deferred_shm(tensor: torch.Tensor) -> dict[str, Any]:
     }
 
 
-def _fill_deferred_shm(handle: dict[str, Any], tensor: torch.Tensor) -> None:
-    """Fill deferred SHM via side CUDA stream + pinned memory (no default-stream sync)."""
+def _fill_deferred_shm(
+    handle: dict[str, Any],
+    tensor: torch.Tensor,
+    gpu_event: torch.cuda.Event | None = None,
+) -> None:
+    """Fill deferred SHM via side CUDA stream + pinned memory.
+
+    *gpu_event* is an optional event recorded on the default stream at the
+    point where the tensor was produced.  The side stream waits on it so that
+    the copy does not start until the default stream has finished writing the
+    tensor — without this cross-stream ordering the read may see partially
+    written data and produce corrupted output.
+    """
     from multiprocessing import shared_memory
 
     import numpy as np
@@ -126,6 +137,10 @@ def _fill_deferred_shm(handle: dict[str, Any], tensor: torch.Tensor) -> None:
         cpu_buf = torch.empty(tensor.shape, dtype=original_dtype, pin_memory=True)
         d2h_stream = torch.cuda.Stream()
         with torch.cuda.stream(d2h_stream):
+            # Cross-stream ordering: the producer (default stream) must finish
+            # writing the tensor before this side-stream consumer reads it.
+            if gpu_event is not None:
+                d2h_stream.wait_event(gpu_event)
             cpu_buf.copy_(tensor.detach(), non_blocking=True)
             event = d2h_stream.record_event()
         # Synchronize only the side stream, not the default stream.
@@ -294,10 +309,11 @@ def pack_diffusion_output_shm_deferred(
 
 def _fill_deferred_handles(
     items: list[tuple[dict[str, Any], torch.Tensor]],
+    gpu_event: torch.cuda.Event | None = None,
 ) -> None:
     """Fill all deferred SHM handles (called from worker background thread)."""
     for handle, tensor in items:
-        _fill_deferred_shm(handle, tensor)
+        _fill_deferred_shm(handle, tensor, gpu_event=gpu_event)
 
 
 def _pack_tensor_if_large(val: torch.Tensor) -> torch.Tensor | dict:
