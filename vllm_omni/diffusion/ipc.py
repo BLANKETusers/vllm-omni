@@ -123,16 +123,36 @@ def _create_deferred_shm(tensor: torch.Tensor) -> dict[str, Any]:
 
 
 def _fill_deferred_shm(handle: dict[str, Any], tensor: torch.Tensor) -> None:
-    """Fill a deferred SHM segment with ``.cpu()`` tensor data in a worker thread."""
+    """Fill a deferred SHM segment with tensor data in a worker background thread.
+
+    Uses a dedicated CUDA stream + pinned memory so the D2H transfer never
+    serialises with the default stream where the next request's forward runs.
+    """
     from multiprocessing import shared_memory
 
     import numpy as np
 
-    tensor = tensor.detach().cpu().contiguous()
     original_dtype = tensor.dtype
+    if tensor.is_cuda:
+        # Pinned CPU staging buffer — DMA can write directly, no pageable copy.
+        cpu_buf = torch.empty(tensor.shape, dtype=original_dtype, pin_memory=True)
+        # D2H on a side stream leaves the default stream free for the next
+        # request's GPU kernels.
+        d2h_stream = torch.cuda.Stream()
+        with torch.cuda.stream(d2h_stream):
+            cpu_buf.copy_(tensor.detach(), non_blocking=True)
+            event = d2h_stream.record_event()
+        # Block only on the side stream, NOT on the default stream.
+        event.synchronize()
+        del d2h_stream
+    else:
+        cpu_buf = tensor.detach().cpu()
+
+    # Promote bfloat16 to float32 for NumPy compatibility.
     if original_dtype == torch.bfloat16:
-        tensor = tensor.to(torch.float32)
-    arr = tensor.numpy()
+        cpu_buf = cpu_buf.to(torch.float32)
+
+    arr = cpu_buf.contiguous().numpy()
 
     shm = shared_memory.SharedMemory(name=handle["name"])
     try:
