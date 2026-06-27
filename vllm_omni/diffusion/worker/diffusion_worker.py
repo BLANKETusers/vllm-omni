@@ -12,9 +12,9 @@ import gc
 import multiprocessing as mp
 import os
 import signal
-import threading
 import traceback
 from collections.abc import Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import Any
@@ -724,6 +724,12 @@ class WorkerProc:
         self.worker = self._create_worker(gpu_id, od_config, worker_extension_cls, custom_pipeline_args)
         self._running = True
 
+        # Bounded pool for deferred SHM fills: max_workers=1 matches
+        # max_num_seqs=1 (serial execution). Under higher concurrency
+        # the limit should be raised to match max_num_seqs to cap
+        # pinned-buffer and SHM usage.
+        self._deferred_fill_pool = ThreadPoolExecutor(max_workers=1)
+
     def _create_worker(
         self,
         gpu_id: int,
@@ -770,11 +776,7 @@ class WorkerProc:
                     gpu_event.record()
                 self.result_mq.enqueue(output)
                 # Fill in background so enqueue is never blocked by D2H.
-                threading.Thread(
-                    target=_fill_deferred_handles,
-                    args=(deferred, gpu_event),
-                    daemon=True,
-                ).start()
+                self._deferred_fill_pool.submit(_fill_deferred_handles, deferred, gpu_event)
             else:
                 try:
                     pack_diffusion_output_shm(output)

@@ -336,7 +336,9 @@ def get_hunyuan_image3_post_process_func(od_config: OmniDiffusionConfig):
     """GPU tensor → PIL, runs outside pipeline_forward to overlap with next request."""
     from diffusers.image_processor import VaeImageProcessor
 
-    image_processor = VaeImageProcessor(vae_scale_factor=16)
+    # vae_scale_factor is unused by postprocess(output_type="pil") which only does
+    # denormalize→PIL; omitted to avoid misleading implication.
+    image_processor = VaeImageProcessor()
 
     def post_process_func(images: torch.Tensor):
         if images.dim() == 3:

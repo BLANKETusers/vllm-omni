@@ -98,13 +98,27 @@ def _create_deferred_shm(tensor: torch.Tensor) -> dict[str, Any]:
         nbytes = tensor.nelement() * tensor.element_size()
         numpy_dtype = str(torch.zeros(1, dtype=original_dtype).numpy().dtype)
 
-    shm = shared_memory.SharedMemory(create=True, size=nbytes)
-    shm.close()
+    shm_name: str | None = None
+    try:
+        shm = shared_memory.SharedMemory(create=True, size=nbytes)
+        shm_name = shm.name
+        shm.close()
 
-    # 1-byte ready flag SHM (0=pending, 1=filled)
-    ready_shm = shared_memory.SharedMemory(create=True, size=1)
-    ready_shm.buf[0] = 0
-    ready_shm.close()
+        # 1-byte ready flag SHM (0=pending, 1=filled, 2=error)
+        ready_shm = shared_memory.SharedMemory(create=True, size=1)
+        ready_shm.buf[0] = 0
+        ready_shm.close()
+    except Exception:
+        # Unlink the data segment if ready_shm creation fails, so it
+        # does not leak in /dev/shm forever.
+        if shm_name is not None:
+            try:
+                lingering = shared_memory.SharedMemory(name=shm_name)
+                lingering.close()
+                lingering.unlink()
+            except Exception:
+                pass
+        raise
 
     return {
         "__tensor_shm_deferred__": True,
@@ -177,7 +191,14 @@ def _is_deferred_handle(val: object) -> bool:
 
 
 def _resolve_deferred_shm(handle: dict[str, Any]) -> torch.Tensor:
-    """Block until deferred SHM is filled, then reconstruct the tensor."""
+    """Block until deferred SHM is filled, then reconstruct the tensor.
+
+    Polls with time.sleep(0.001) for the D2H duration (typically 14-60ms),
+    blocking the async event loop. Acceptable for the current single-request
+    serial model (max_num_seqs=1); for concurrent requests or streaming,
+    callers should offload this via loop.run_in_executor so the event loop
+    stays responsive.
+    """
     import time
     from multiprocessing import shared_memory
 
