@@ -692,6 +692,12 @@ class OmniDiffusionConfig:
     # Streaming mode settings
     streaming_output: bool = False  # Start (video) generation with initial prompt, but streaming output in chunks
 
+    # Deferred SHM D2H: offload GPU→CPU copies to a background thread so
+    # the inference stream is never blocked by the transfer.  Automatically
+    # set by ``update_multimodal_support`` from model metadata; not a
+    # user-facing config knob.
+    enable_deferred_shm: bool = False
+
     # Maximum number of sequences to generate in a batch
     max_num_seqs: int = 1
 
@@ -920,11 +926,12 @@ class OmniDiffusionConfig:
         self._propagate_quantization_from_tf_config(tf_config)
 
     def update_multimodal_support(self) -> None:
-        # Resolve serving-visible multimodal behavior from shared metadata
-        # instead of importing concrete pipeline modules into the config layer.
+        # Resolve model-specific behavior from shared metadata instead of
+        # importing concrete pipeline modules into the config layer.
         metadata = get_diffusion_model_metadata(self.model_class_name)
         self.supports_multimodal_inputs = metadata.supports_multimodal_inputs
         self.max_multimodal_image_inputs = metadata.max_multimodal_image_inputs
+        self.enable_deferred_shm = metadata.enable_deferred_shm
 
     @staticmethod
     def _looks_like_lance_subfolder(model: str | None) -> bool:

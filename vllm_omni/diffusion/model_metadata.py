@@ -10,6 +10,9 @@ class DiffusionModelMetadata:
     # config/model plumbing can read it without importing concrete pipelines.
     supports_multimodal_inputs: bool = False
     max_multimodal_image_inputs: int | None = None
+    # Deferred SHM D2H: offload GPU→CPU copies to a background thread so
+    # the inference stream is never blocked by the transfer.
+    enable_deferred_shm: bool = False
 
 
 QWEN_IMAGE_EDIT_PLUS_MAX_INPUT_IMAGES = 4
@@ -25,6 +28,12 @@ _DIFFUSION_MODEL_METADATA: dict[str, DiffusionModelMetadata] = {
     "HunyuanImage3Pipeline": DiffusionModelMetadata(
         supports_multimodal_inputs=True,
         max_multimodal_image_inputs=HUNYUAN_IMAGE3_MAX_INPUT_IMAGES,
+        enable_deferred_shm=True,
+    ),
+    "HunyuanImage3ForCausalMM": DiffusionModelMetadata(
+        supports_multimodal_inputs=True,
+        max_multimodal_image_inputs=HUNYUAN_IMAGE3_MAX_INPUT_IMAGES,
+        enable_deferred_shm=True,
     ),
 }
 

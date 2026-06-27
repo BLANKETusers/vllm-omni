@@ -681,9 +681,6 @@ class CustomPipelineWorkerExtension:
         self.init_lora_manager()
 
 
-_DEFERRED_SHM_MODELS = {"HunyuanImage3Pipeline", "HunyuanImage3ForCausalMM"}
-
-
 class WorkerProc:
     """Wrapper that runs one Worker in a separate process."""
 
@@ -752,7 +749,7 @@ class WorkerProc:
             if isinstance(output, OmniACK):
                 self.result_mq.enqueue(output)
                 return
-            is_deferred_model = self.od_config.model_class_name in _DEFERRED_SHM_MODELS
+            is_deferred_model = self.od_config.enable_deferred_shm
             if is_deferred_model and isinstance(output, DiffusionOutput):
                 try:
                     deferred = pack_diffusion_output_shm_deferred(output)
