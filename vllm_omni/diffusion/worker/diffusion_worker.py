@@ -771,7 +771,7 @@ class WorkerProc:
                 # Record an event on the default stream so the background
                 # thread's side-stream D2H copy waits for the producer.
                 gpu_event = None
-                if torch.cuda.is_available():
+                if torch.accelerator.is_available():
                     gpu_event = torch.cuda.Event()
                     gpu_event.record()
                 self.result_mq.enqueue(output)
