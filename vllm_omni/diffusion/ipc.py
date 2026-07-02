@@ -168,18 +168,9 @@ def _is_deferred_handle(val: object) -> bool:
 
 
 def _resolve_deferred_shm(handle: dict[str, Any]) -> torch.Tensor:
-    """Block until deferred SHM is filled, then reconstruct the tensor.
-
-    Polls with time.sleep(0.001) for the D2H duration (typically 14-60ms),
-    blocking the async event loop. Acceptable for the current single-request
-    serial model (max_num_seqs=1); for concurrent requests or streaming,
-    callers should offload this via loop.run_in_executor so the event loop
-    stays responsive.
-    """
+    """Block until deferred SHM is filled, then reconstruct the tensor."""
     import time
     from multiprocessing import shared_memory
-
-    import numpy as np
 
     deadline = time.monotonic() + 30.0
     while True:
@@ -201,19 +192,8 @@ def _resolve_deferred_shm(handle: dict[str, Any]) -> torch.Tensor:
             raise TimeoutError(f"Deferred SHM '{handle['name']}' not ready after 30 s")
         time.sleep(0.001)
 
-    shm = shared_memory.SharedMemory(name=handle["name"])
-    try:
-        np_dtype = np.dtype(handle["numpy_dtype"])
-        arr = np.ndarray(handle["shape"], dtype=np_dtype, buffer=shm.buf[: handle["nbytes"]])
-        tensor = torch.from_numpy(arr.copy())
-        torch_dtype_str = handle.get("torch_dtype", "")
-        if torch_dtype_str:
-            original_dtype = getattr(torch, torch_dtype_str.replace("torch.", ""), None)
-            if original_dtype is not None and tensor.dtype != original_dtype:
-                tensor = tensor.to(original_dtype)
-    finally:
-        shm.close()
-        shm.unlink()
+    # Data ready — reuse existing _tensor_from_shm logic.
+    tensor = _tensor_from_shm(handle)
 
     # Clean up the ready-flag SHM.
     try:
