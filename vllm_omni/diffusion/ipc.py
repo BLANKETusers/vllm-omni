@@ -131,42 +131,20 @@ def _create_deferred_shm(tensor: torch.Tensor) -> dict[str, Any]:
     }
 
 
-def _fill_deferred_shm(
-    handle: dict[str, Any],
-    tensor: torch.Tensor,
-    gpu_event: torch.cuda.Event | None = None,
-) -> None:
-    """Fill deferred SHM via side CUDA stream + pinned memory.
+def _fill_deferred_shm(handle: dict[str, Any], tensor: torch.Tensor) -> None:
+    """Fill a deferred SHM handle with tensor data.
 
-    *gpu_event* is an optional event recorded on the default stream at the
-    point where the tensor was produced.  The side stream waits on it so that
-    the copy does not start until the default stream has finished writing the
-    tensor — without this cross-stream ordering the read may see partially
-    written data and produce corrupted output.
+    Called from the worker's background fill thread.  ``.cpu()`` is a
+    blocking D2H call — intentionally blocking only this thread, not the
+    worker's main thread.
     """
     from multiprocessing import shared_memory
 
     import numpy as np
 
     original_dtype = tensor.dtype
-    if tensor.is_cuda:
-        # Pinned staging buffer + side stream: D2H never blocks the default stream.
-        cpu_buf = torch.empty(tensor.shape, dtype=original_dtype, pin_memory=True)
-        d2h_stream = torch.cuda.Stream()
-        with torch.cuda.stream(d2h_stream):
-            # Cross-stream ordering: the producer (default stream) must finish
-            # writing the tensor before this side-stream consumer reads it.
-            if gpu_event is not None:
-                d2h_stream.wait_event(gpu_event)
-            cpu_buf.copy_(tensor.detach(), non_blocking=True)
-            event = d2h_stream.record_event()
-        # Synchronize only the side stream, not the default stream.
-        event.synchronize()
-        del d2h_stream
-    else:
-        cpu_buf = tensor.detach().cpu()
+    cpu_buf = tensor.detach().cpu()
 
-    # Promote bfloat16 to float32 for NumPy.
     if original_dtype == torch.bfloat16:
         cpu_buf = cpu_buf.to(torch.float32)
 
@@ -179,7 +157,6 @@ def _fill_deferred_shm(
     finally:
         shm.close()
 
-    # Signal: data is ready.
     ready_shm = shared_memory.SharedMemory(name=handle["ready_name"])
     ready_shm.buf[0] = 1
     ready_shm.close()
@@ -345,18 +322,16 @@ def _signal_deferred_error(handle: dict[str, Any]) -> None:
 
 def _fill_deferred_handles(
     items: list[tuple[dict[str, Any], torch.Tensor]],
-    gpu_event: torch.cuda.Event | None = None,
 ) -> None:
     """Fill all deferred SHM handles (called from worker background thread)."""
     for handle, tensor in items:
         try:
-            _fill_deferred_shm(handle, tensor, gpu_event=gpu_event)
+            _fill_deferred_shm(handle, tensor)
         except Exception:
             logger.exception(
                 "Deferred SHM fill failed for handle '%s'; signalling error to consumer",
                 handle.get("name", "unknown"),
             )
-            # Signal error (2) so the consumer does not hang for 30 s.
             _signal_deferred_error(handle)
 
 

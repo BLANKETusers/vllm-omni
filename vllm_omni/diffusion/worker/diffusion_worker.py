@@ -11,10 +11,11 @@ to DiffusionModelRunner.
 import gc
 import multiprocessing as mp
 import os
+import queue
 import signal
+import threading
 import traceback
 from collections.abc import Iterable, Iterator
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import Any
@@ -724,11 +725,13 @@ class WorkerProc:
         self.worker = self._create_worker(gpu_id, od_config, worker_extension_cls, custom_pipeline_args)
         self._running = True
 
-        # Bounded pool for deferred SHM fills: max_workers=1 matches
-        # max_num_seqs=1 (serial execution). Under higher concurrency
-        # the limit should be raised to match max_num_seqs to cap
-        # pinned-buffer and SHM usage.
-        self._deferred_fill_pool = ThreadPoolExecutor(max_workers=1)
+        self._deferred_fill_queue: queue.Queue = queue.Queue()
+        self._deferred_fill_thread = threading.Thread(
+            target=self._deferred_fill_loop,
+            daemon=True,
+            name="DiffusionDeferredFill",
+        )
+        self._deferred_fill_thread.start()
 
     def _create_worker(
         self,
@@ -768,15 +771,11 @@ class WorkerProc:
                             logger.warning("SHM pack failed for model output: %s", e2)
                     self.result_mq.enqueue(output)
                     return
-                # Record an event on the default stream so the background
-                # thread's side-stream D2H copy waits for the producer.
-                gpu_event = None
-                if torch.accelerator.is_available():
-                    gpu_event = torch.cuda.Event()
-                    gpu_event.record()
+                # Enqueue lightweight handle immediately — D2H + SHM fill
+                # runs in the background daemon thread so the worker can
+                # start the next request without waiting.
                 self.result_mq.enqueue(output)
-                # Fill in background so enqueue is never blocked by D2H.
-                self._deferred_fill_pool.submit(_fill_deferred_handles, deferred, gpu_event)
+                self._deferred_fill_queue.put(deferred)
             else:
                 try:
                     pack_diffusion_output_shm(output)
@@ -784,6 +783,15 @@ class WorkerProc:
                     if hasattr(output, "output"):
                         logger.warning("SHM pack failed for model output: %s", e)
                 self.result_mq.enqueue(output)
+
+    def _deferred_fill_loop(self):
+        """Background thread: fill deferred SHM handles asynchronously.
+        Blocking .cpu() is safe here — it only blocks this thread, not the
+        worker's main thread.
+        """
+        while self._running:
+            items = self._deferred_fill_queue.get()
+            _fill_deferred_handles(items)
 
     def recv_message(self):
         """Receive messages from broadcast queue."""
