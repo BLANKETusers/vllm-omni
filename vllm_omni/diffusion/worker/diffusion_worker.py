@@ -697,6 +697,12 @@ class WorkerProc:
         self.od_config = od_config
         self.gpu_id = gpu_id
         self.wake_event = wake_event
+        logger.info(
+            "Worker %s: enable_deferred_shm=%s, model_class_name=%s",
+            gpu_id,
+            od_config.enable_deferred_shm,
+            od_config.model_class_name,
+        )
 
         # Inter-process Communication
         self.context = zmq.Context(io_threads=2)
