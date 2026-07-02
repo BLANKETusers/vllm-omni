@@ -51,6 +51,7 @@ from vllm_omni.diffusion.ipc import (
     pack_diffusion_output_shm_deferred,
 )
 from vllm_omni.diffusion.lora.manager import DiffusionLoRAManager
+from vllm_omni.diffusion.model_metadata import get_diffusion_model_metadata
 from vllm_omni.diffusion.registry import get_diffusion_ir_op_priority_func
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.diffusion.sched.interface import DiffusionSchedulerOutput
@@ -697,12 +698,10 @@ class WorkerProc:
         self.od_config = od_config
         self.gpu_id = gpu_id
         self.wake_event = wake_event
-        logger.info(
-            "Worker %s: enable_deferred_shm=%s, model_class_name=%s",
-            gpu_id,
-            od_config.enable_deferred_shm,
-            od_config.model_class_name,
-        )
+        # enable_deferred_shm may not be set by the main process; re-derive from model metadata.
+        self.od_config.enable_deferred_shm = get_diffusion_model_metadata(
+            od_config.model_class_name
+        ).enable_deferred_shm
 
         # Inter-process Communication
         self.context = zmq.Context(io_threads=2)
