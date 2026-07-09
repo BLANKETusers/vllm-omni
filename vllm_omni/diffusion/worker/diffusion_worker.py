@@ -62,6 +62,38 @@ from vllm_omni.worker.gpu_memory_utils import get_process_gpu_memory
 logger = init_logger(__name__)
 
 
+def _recursive_copy_tensors_to_cpu(obj: object) -> None:
+    """Non-blocking copy GPU tensors to CPU on the current CUDA stream.
+
+    Mutates the object in-place, replacing GPU tensors with CPU copies.
+    Does NOT synchronize — the caller must synchronize the stream afterward.
+    """
+    if isinstance(obj, torch.Tensor):
+        if obj.device.type != "cpu":
+            # non_blocking=True: the copy runs on the current CUDA stream
+            # without blocking the default stream.
+            return obj.detach().to("cpu", non_blocking=True)
+    elif isinstance(obj, dict):
+        for key, value in obj.items():
+            obj[key] = _recursive_copy_tensors_to_cpu(value)
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            obj[i] = _recursive_copy_tensors_to_cpu(item)
+    elif isinstance(obj, tuple):
+        return tuple(_recursive_copy_tensors_to_cpu(item) for item in obj)
+    elif hasattr(obj, "output") and hasattr(obj, "trajectory_latents"):
+        # DiffusionOutput (or dataclass with similar fields)
+        if obj.output is not None:
+            obj.output = _recursive_copy_tensors_to_cpu(obj.output)
+        if getattr(obj, "trajectory_latents", None) is not None:
+            obj.trajectory_latents = _recursive_copy_tensors_to_cpu(obj.trajectory_latents)
+        if getattr(obj, "trajectory_timesteps", None) is not None:
+            obj.trajectory_timesteps = _recursive_copy_tensors_to_cpu(obj.trajectory_timesteps)
+        if getattr(obj, "trajectory_log_probs", None) is not None:
+            obj.trajectory_log_probs = _recursive_copy_tensors_to_cpu(obj.trajectory_log_probs)
+    return obj
+
+
 @dataclass
 class _DiffusionVllmModelConfig:
     model: str
@@ -855,21 +887,23 @@ class WorkerProc:
     def _async_output_loop(self):
         """Background thread: D2H + SHM packing for async diffusion output.
 
-        Uses a side CUDA stream with producer event to avoid blocking the
-        GPU default stream where the next request's forward runs.
+        D2H uses a side CUDA stream with ``non_blocking=True`` so the GPU
+        default stream (where the next forward runs) is never blocked.
+        SHM packing runs on CPU and does not touch the GPU.
         """
         while self._running:
             item = self._async_output_queue.get()
             output, output_token = item
             try:
-                device = torch.device(f"cuda:{self.gpu_id}")
-                torch.accelerator.set_device_index(device)
-                producer_event = torch.accelerator.current_stream().record_event()
-                copy_stream = torch.Stream(device=device)
-                copy_stream.wait_event(producer_event)
-                with copy_stream:
-                    pack_diffusion_output_shm(output)
-                copy_stream.synchronize()
+                # Side CUDA stream: pre-copy all large GPU tensors to CPU
+                # without blocking the default stream.
+                d2h_stream = torch.cuda.Stream()
+                with torch.cuda.stream(d2h_stream):
+                    _recursive_copy_tensors_to_cpu(output)
+                d2h_stream.synchronize()
+
+                # Tensors now on CPU — SHM packing touches only host memory.
+                pack_diffusion_output_shm(output)
 
                 self.result_mq.enqueue(
                     AsyncDiffusionOutput(
