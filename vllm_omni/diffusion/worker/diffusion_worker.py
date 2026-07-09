@@ -62,27 +62,30 @@ from vllm_omni.worker.gpu_memory_utils import get_process_gpu_memory
 logger = init_logger(__name__)
 
 
-def _recursive_copy_tensors_to_cpu(obj: object) -> None:
-    """Non-blocking copy GPU tensors to CPU on the current CUDA stream.
+def _recursive_copy_tensors_to_cpu(obj: object) -> object:
+    """Copy GPU tensors to pinned CPU memory on the current CUDA stream.
 
-    Mutates the object in-place, replacing GPU tensors with CPU copies.
-    Does NOT synchronize — the caller must synchronize the stream afterward.
+    Uses ``copy_()`` with ``pin_memory=True`` for fast DMA transfer that
+    respects the current CUDA stream context.  Unlike ``tensor.to("cpu")``,
+    this does NOT synchronize the default stream.
+
+    Returns the object with GPU tensors replaced by pinned CPU copies.
     """
-    if isinstance(obj, torch.Tensor):
-        if obj.device.type != "cpu":
-            # non_blocking=True: the copy runs on the current CUDA stream
-            # without blocking the default stream.
-            return obj.detach().to("cpu", non_blocking=True)
-    elif isinstance(obj, dict):
-        for key, value in obj.items():
-            obj[key] = _recursive_copy_tensors_to_cpu(value)
-    elif isinstance(obj, list):
-        for i, item in enumerate(obj):
-            obj[i] = _recursive_copy_tensors_to_cpu(item)
-    elif isinstance(obj, tuple):
+    if isinstance(obj, torch.Tensor) and obj.device.type != "cpu":
+        t = obj.detach()
+        # NumPy does not support bfloat16 — promote on GPU before the copy.
+        if t.dtype == torch.bfloat16:
+            t = t.to(torch.float32)
+        cpu = torch.empty(t.shape, dtype=t.dtype, pin_memory=True)
+        cpu.copy_(t, non_blocking=True)
+        return cpu
+    if isinstance(obj, dict):
+        return {key: _recursive_copy_tensors_to_cpu(value) for key, value in obj.items()}
+    if isinstance(obj, list):
+        return [_recursive_copy_tensors_to_cpu(item) for item in obj]
+    if isinstance(obj, tuple):
         return tuple(_recursive_copy_tensors_to_cpu(item) for item in obj)
-    elif hasattr(obj, "output") and hasattr(obj, "trajectory_latents"):
-        # DiffusionOutput (or dataclass with similar fields)
+    if hasattr(obj, "output") and hasattr(obj, "trajectory_latents"):
         if obj.output is not None:
             obj.output = _recursive_copy_tensors_to_cpu(obj.output)
         if getattr(obj, "trajectory_latents", None) is not None:
@@ -834,6 +837,16 @@ class WorkerProc:
     def _generate_output_token() -> str:
         return uuid.uuid4().hex
 
+    @staticmethod
+    def _record_gpu_event() -> torch.cuda.Event | None:
+        """Record a CUDA event on the default stream to mark tensor readiness."""
+        try:
+            event = torch.cuda.Event()
+            event.record()
+            return event
+        except Exception:
+            return None
+
     def _create_worker(
         self,
         gpu_id: int,
@@ -865,13 +878,14 @@ class WorkerProc:
         if self.od_config.enable_async_diffusion_output and isinstance(output, DiffusionOutput):
             try:
                 output_token = WorkerProc._generate_output_token()
+                gpu_event = WorkerProc._record_gpu_event()
                 msg = AsyncDiffusionOutput(
                     kind=AsyncDiffusionOutput.COMPUTE_DONE,
                     rpc_id=rpc_id,
                     output_token=output_token,
                 )
                 self.result_mq.enqueue(msg)
-                self._async_output_queue.put((output, output_token))
+                self._async_output_queue.put((output, output_token, gpu_event))
                 return
             except Exception as e:
                 logger.warning("Async output submission failed, falling back to sync: %s", e)
@@ -887,22 +901,26 @@ class WorkerProc:
     def _async_output_loop(self):
         """Background thread: D2H + SHM packing for async diffusion output.
 
-        D2H uses a side CUDA stream with ``non_blocking=True`` so the GPU
-        default stream (where the next forward runs) is never blocked.
-        SHM packing runs on CPU and does not touch the GPU.
+        Uses a side CUDA stream with pinned-memory ``copy_()`` so the D2H
+        transfer runs on the side stream's GPU copy engine without blocking
+        the default stream (where the next forward lives).
         """
         while self._running:
             item = self._async_output_queue.get()
-            output, output_token = item
+            output, output_token, gpu_event = item
             try:
-                # Side CUDA stream: pre-copy all large GPU tensors to CPU
-                # without blocking the default stream.
+                # Side CUDA stream: copy all GPU tensors to pinned CPU memory.
                 d2h_stream = torch.cuda.Stream()
                 with torch.cuda.stream(d2h_stream):
+                    # Cross-stream ordering: wait for default stream to finish
+                    # writing the output tensors before this side stream reads.
+                    if gpu_event is not None:
+                        d2h_stream.wait_event(gpu_event)
                     _recursive_copy_tensors_to_cpu(output)
+                # Synchronize only the side stream — default stream untouched.
                 d2h_stream.synchronize()
 
-                # Tensors now on CPU — SHM packing touches only host memory.
+                # Tensors are now in pinned CPU memory; SHM packing is host-only.
                 pack_diffusion_output_shm(output)
 
                 self.result_mq.enqueue(
