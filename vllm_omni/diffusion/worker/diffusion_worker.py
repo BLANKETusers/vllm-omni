@@ -875,10 +875,7 @@ class WorkerProc:
             return
 
         # Async path: enqueue compute_done immediately, bg thread does D2H+SHM.
-        async_enabled = self.od_config.enable_async_diffusion_output
-        is_diff = isinstance(output, DiffusionOutput)
-        logger.info("[ASYNC] return_result: async_enabled=%s is_diff=%s", async_enabled, is_diff)
-        if async_enabled and is_diff:
+        if self.od_config.enable_async_diffusion_output and isinstance(output, DiffusionOutput):
             try:
                 output_token = WorkerProc._generate_output_token()
                 gpu_event = WorkerProc._record_gpu_event()
@@ -889,7 +886,6 @@ class WorkerProc:
                 )
                 self.result_mq.enqueue(msg)
                 self._async_output_queue.put((output, output_token, gpu_event))
-                logger.info("[ASYNC] compute_done sent token=%s rpc_id=%s", output_token, rpc_id)
                 return
             except Exception as e:
                 logger.warning("Async output submission failed, falling back to sync: %s", e)
@@ -912,7 +908,6 @@ class WorkerProc:
         while self._running:
             item = self._async_output_queue.get()
             output, output_token, gpu_event = item
-            logger.info("[ASYNC] bg thread: start D2H token=%s", output_token)
             try:
                 # Side CUDA stream: copy all GPU tensors to pinned CPU memory.
                 d2h_stream = torch.cuda.Stream()
@@ -935,7 +930,6 @@ class WorkerProc:
                         output=output,
                     )
                 )
-                logger.info("[ASYNC] bg thread: output_ready sent token=%s", output_token)
             except Exception:
                 logger.exception(
                     "Async output packing failed for token '%s'; sending error",

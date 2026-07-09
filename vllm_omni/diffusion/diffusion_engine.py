@@ -256,10 +256,8 @@ class DiffusionEngine:
 
         # Async mode: wait for background D2H/SHM to complete.
         if output.output_token:
-            logger.info("[ASYNC] step: waiting output_ready token=%s", output.output_token)
             fut = self.executor.wait_output_ready(output.output_token)
             output = await asyncio.wrap_future(fut)
-            logger.info("[ASYNC] step: output_ready received")
 
         return self.postprocess_output(request, output, diffusion_engine_start_time, preprocess_time, exec_total_time)
 
