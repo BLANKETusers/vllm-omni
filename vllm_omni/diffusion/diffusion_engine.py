@@ -253,6 +253,12 @@ class DiffusionEngine:
         exec_start_time = time.perf_counter()
         output = await self.async_add_req_and_wait_for_response(request)
         exec_total_time = time.perf_counter() - exec_start_time
+
+        # Async mode: wait for background D2H/SHM to complete.
+        if output.output_token:
+            fut = self.executor.wait_output_ready(output.output_token)
+            output = await asyncio.wrap_future(fut)
+
         return self.postprocess_output(request, output, diffusion_engine_start_time, preprocess_time, exec_total_time)
 
     async def step_streaming(self, request: OmniDiffusionRequest) -> AsyncGenerator[list[OmniRequestOutput], None]:
@@ -271,6 +277,11 @@ class DiffusionEngine:
         generator = self.async_add_req_and_stream_response(request)
         async for output in generator:
             exec_total_time = time.perf_counter() - exec_start_time
+
+            if output.output_token:
+                fut = self.executor.wait_output_ready(output.output_token)
+                output = await asyncio.wrap_future(fut)
+
             yield self.postprocess_output(
                 request, output, diffusion_engine_start_time, preprocess_time, exec_total_time
             )
@@ -769,11 +780,15 @@ class DiffusionEngine:
                     raise ValueError("Sync func should receive one result at one time")
                 if target_request_id in finished_req_ids:
                     req_output = runner_output.get_request_output(target_request_id)
-                    return self._finalize_finished_request(
+                    output = self._finalize_finished_request(
                         target_request_id,
                         runner_output=req_output,
                         missing_result_error="Diffusion execution finished without a final output.",
                     )
+                    if output.output_token:
+                        fut = self.executor.wait_output_ready(output.output_token)
+                        output = fut.result(timeout=30.0)
+                    return output
 
     def profile(self, is_start: bool = True, profile_prefix: str | None = None) -> None:
         """Start or stop profiling on all diffusion workers.
@@ -1081,5 +1096,8 @@ class DiffusionEngine:
 
         if runner_output is not None and runner_output.result is not None:
             return runner_output.result
+
+        if runner_output is not None and runner_output.output_token is not None:
+            return DiffusionOutput(output_token=runner_output.output_token)
 
         return DiffusionOutput(error=missing_result_error)

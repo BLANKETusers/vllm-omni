@@ -42,8 +42,14 @@ class RequestScheduler(_BaseScheduler):
             req_output = output.get_request_output(request_id)
             result = req_output.result if req_output is not None else None
             if result is None:
-                terminal_statuses[request_id] = DiffusionRequestStatus.FINISHED_ERROR
-                terminal_errors[request_id] = "No output result"
+                # Async mode: result=None with output_token means compute done,
+                # final output will arrive later via wait_output_ready.
+                if req_output is not None and req_output.output_token is not None:
+                    terminal_statuses[request_id] = DiffusionRequestStatus.FINISHED_COMPLETED
+                    terminal_errors[request_id] = None
+                else:
+                    terminal_statuses[request_id] = DiffusionRequestStatus.FINISHED_ERROR
+                    terminal_errors[request_id] = "No output result"
             elif result.aborted:
                 terminal_statuses[request_id] = DiffusionRequestStatus.FINISHED_ABORTED
                 terminal_errors[request_id] = None

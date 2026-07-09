@@ -7,7 +7,7 @@ import random
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, fields
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import diffusers
 import torch
@@ -782,6 +782,11 @@ class OmniDiffusionConfig:
     # Streaming mode settings
     streaming_output: bool = False  # Start (video) generation with initial prompt, but streaming output in chunks
 
+    # Async diffusion output: offload GPU→CPU copies to a Worker background
+    # thread and signal readiness via a dedicated message channel instead of
+    # polling SHM flags.  Enabled per-model via CLI, YAML, or env var.
+    enable_async_diffusion_output: bool = False
+
     # Maximum number of sequences to generate in a batch
     max_num_seqs: int = 1
 
@@ -1204,6 +1209,7 @@ class DiffusionOutput:
     trajectory_latents: torch.Tensor | dict[str, Any] | None = None
     trajectory_log_probs: torch.Tensor | dict[str, Any] | None = None
     trajectory_decoded: list[Image.Image] | None = None
+    output_token: str | None = None
     error: str | None = None
     error_status_code: int | None = None
     error_type: str | None = None
@@ -1260,6 +1266,33 @@ class DiffusionOutput:
             error_status_code=status_code,
             error_type=error_type,
         )
+
+
+@dataclass
+class AsyncDiffusionOutput:
+    """Async protocol envelope for ``result_mq`` messages.
+
+    When ``enable_async_diffusion_output`` is True, all ``result_mq``
+    messages use this envelope.  The ``kind`` field routes the message
+    to the correct consumer:
+
+    * ``RPC_RESULT`` — ordinary RPC return (sleep, wake, profile, etc.)
+    * ``COMPUTE_DONE`` — worker forward finished, GPU can start next request
+    * ``OUTPUT_READY`` — background D2H/SHM packing finished, final output
+      is available via ``output_token``
+    """
+
+    RPC_RESULT: ClassVar[str] = "rpc_result"
+    COMPUTE_DONE: ClassVar[str] = "compute_done"
+    OUTPUT_READY: ClassVar[str] = "output_ready"
+
+    kind: str
+    rpc_id: str | None = None
+    req_id: str = ""
+    output_token: str | None = None
+    result: Any | None = None
+    output: DiffusionOutput | None = None
+    error: str | None = None
 
 
 class DiffusionRequestAbortedError(RuntimeError):

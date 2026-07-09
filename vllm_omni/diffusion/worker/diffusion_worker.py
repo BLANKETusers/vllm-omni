@@ -11,8 +11,11 @@ to DiffusionModelRunner.
 import gc
 import multiprocessing as mp
 import os
+import queue
 import signal
+import threading
 import traceback
+import uuid
 from collections.abc import Iterable, Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
@@ -30,6 +33,7 @@ from vllm.utils.mem_utils import GiB_bytes
 from vllm.v1.worker.workspace import init_workspace_manager
 
 from vllm_omni.diffusion.data import (
+    AsyncDiffusionOutput,
     DiffusionOutput,
     OmniACK,
     OmniDiffusionConfig,
@@ -786,6 +790,18 @@ class WorkerProc:
         self.worker = self._create_worker(gpu_id, od_config, worker_extension_cls, custom_pipeline_args)
         self._running = True
 
+        self._async_output_queue: queue.Queue = queue.Queue()
+        self._async_output_thread = threading.Thread(
+            target=self._async_output_loop,
+            daemon=True,
+            name="DiffusionAsyncOutput",
+        )
+        self._async_output_thread.start()
+
+    @staticmethod
+    def _generate_output_token() -> str:
+        return uuid.uuid4().hex
+
     def _create_worker(
         self,
         gpu_id: int,
@@ -805,18 +821,75 @@ class WorkerProc:
         )
         return wrapper
 
-    def return_result(self, output: Any):
+    def return_result(self, output: Any, rpc_id: str | None = None):
         """Reply to client, only on rank 0."""
-        if self.result_mq is not None:
-            if isinstance(output, OmniACK):
-                self.result_mq.enqueue(output)
-                return
-            try:
-                pack_diffusion_output_shm(output)
-            except Exception as e:
-                if hasattr(output, "output"):
-                    logger.warning("SHM pack failed for model output: %s", e)
+        if self.result_mq is None:
+            return
+        if isinstance(output, OmniACK):
             self.result_mq.enqueue(output)
+            return
+
+        # Async path: enqueue compute_done immediately, bg thread does D2H+SHM.
+        if self.od_config.enable_async_diffusion_output and isinstance(output, DiffusionOutput):
+            try:
+                output_token = WorkerProc._generate_output_token()
+                msg = AsyncDiffusionOutput(
+                    kind=AsyncDiffusionOutput.COMPUTE_DONE,
+                    rpc_id=rpc_id,
+                    output_token=output_token,
+                )
+                self.result_mq.enqueue(msg)
+                self._async_output_queue.put((output, output_token))
+                return
+            except Exception as e:
+                logger.warning("Async output submission failed, falling back to sync: %s", e)
+
+        # Sync path (original, or async fallback).
+        try:
+            pack_diffusion_output_shm(output)
+        except Exception as e:
+            if hasattr(output, "output"):
+                logger.warning("SHM pack failed for model output: %s", e)
+        self.result_mq.enqueue(output)
+
+    def _async_output_loop(self):
+        """Background thread: D2H + SHM packing for async diffusion output.
+
+        Uses a side CUDA stream with producer event to avoid blocking the
+        GPU default stream where the next request's forward runs.
+        """
+        while self._running:
+            item = self._async_output_queue.get()
+            output, output_token = item
+            try:
+                device = torch.device(f"cuda:{self.gpu_id}")
+                torch.accelerator.set_device_index(device)
+                producer_event = torch.accelerator.current_stream().record_event()
+                copy_stream = torch.Stream(device=device)
+                copy_stream.wait_event(producer_event)
+                with copy_stream:
+                    pack_diffusion_output_shm(output)
+                copy_stream.synchronize()
+
+                self.result_mq.enqueue(
+                    AsyncDiffusionOutput(
+                        kind=AsyncDiffusionOutput.OUTPUT_READY,
+                        output_token=output_token,
+                        output=output,
+                    )
+                )
+            except Exception:
+                logger.exception(
+                    "Async output packing failed for token '%s'; sending error",
+                    output_token,
+                )
+                self.result_mq.enqueue(
+                    AsyncDiffusionOutput(
+                        kind=AsyncDiffusionOutput.OUTPUT_READY,
+                        output_token=output_token,
+                        error="Background D2H/SHM packing failed",
+                    )
+                )
 
     def recv_message(self):
         """Receive messages from broadcast queue."""
@@ -932,9 +1005,10 @@ class WorkerProc:
             # Route message based on type
             elif isinstance(msg, dict) and msg.get("type") == "rpc":
                 try:
+                    rpc_id = msg.get("rpc_id")
                     result, should_reply = self.execute_rpc(msg)
                     if should_reply:
-                        self.return_result(result)
+                        self.return_result(result, rpc_id=rpc_id)
                 except Exception as e:
                     logger.error(f"Error processing RPC: {e}", exc_info=True)
                     if self.result_mq is not None:
