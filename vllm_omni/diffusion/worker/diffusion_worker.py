@@ -62,41 +62,6 @@ from vllm_omni.worker.gpu_memory_utils import get_process_gpu_memory
 logger = init_logger(__name__)
 
 
-def _recursive_copy_tensors_to_cpu(obj: object) -> object:
-    """Copy GPU tensors to pinned CPU memory on the current CUDA stream.
-
-    Uses ``copy_()`` with ``pin_memory=True`` for fast DMA transfer that
-    respects the current CUDA stream context.  Unlike ``tensor.to("cpu")``,
-    this does NOT synchronize the default stream.
-
-    Returns the object with GPU tensors replaced by pinned CPU copies.
-    """
-    if isinstance(obj, torch.Tensor) and obj.device.type != "cpu":
-        t = obj.detach()
-        # NumPy does not support bfloat16 — promote on GPU before the copy.
-        if t.dtype == torch.bfloat16:
-            t = t.to(torch.float32)
-        cpu = torch.empty(t.shape, dtype=t.dtype, pin_memory=True)
-        cpu.copy_(t, non_blocking=True)
-        return cpu
-    if isinstance(obj, dict):
-        return {key: _recursive_copy_tensors_to_cpu(value) for key, value in obj.items()}
-    if isinstance(obj, list):
-        return [_recursive_copy_tensors_to_cpu(item) for item in obj]
-    if isinstance(obj, tuple):
-        return tuple(_recursive_copy_tensors_to_cpu(item) for item in obj)
-    if hasattr(obj, "output") and hasattr(obj, "trajectory_latents"):
-        if obj.output is not None:
-            obj.output = _recursive_copy_tensors_to_cpu(obj.output)
-        if getattr(obj, "trajectory_latents", None) is not None:
-            obj.trajectory_latents = _recursive_copy_tensors_to_cpu(obj.trajectory_latents)
-        if getattr(obj, "trajectory_timesteps", None) is not None:
-            obj.trajectory_timesteps = _recursive_copy_tensors_to_cpu(obj.trajectory_timesteps)
-        if getattr(obj, "trajectory_log_probs", None) is not None:
-            obj.trajectory_log_probs = _recursive_copy_tensors_to_cpu(obj.trajectory_log_probs)
-    return obj
-
-
 @dataclass
 class _DiffusionVllmModelConfig:
     model: str
@@ -901,27 +866,20 @@ class WorkerProc:
     def _async_output_loop(self):
         """Background thread: D2H + SHM packing for async diffusion output.
 
-        Uses a side CUDA stream with pinned-memory ``copy_()`` so the D2H
-        transfer runs on the side stream's GPU copy engine without blocking
-        the default stream (where the next forward lives).
+        Uses a side CUDA stream so the D2H transfer does not block the GPU
+        default stream where the next forward runs.
         """
         while self._running:
             item = self._async_output_queue.get()
             output, output_token, gpu_event = item
             try:
-                # Side CUDA stream: copy all GPU tensors to pinned CPU memory.
                 d2h_stream = torch.cuda.Stream()
-                with torch.cuda.stream(d2h_stream):
-                    # Cross-stream ordering: wait for default stream to finish
-                    # writing the output tensors before this side stream reads.
-                    if gpu_event is not None:
-                        d2h_stream.wait_event(gpu_event)
-                    _recursive_copy_tensors_to_cpu(output)
-                # Synchronize only the side stream — default stream untouched.
+                # Cross-stream ordering: wait for default stream to finish
+                # writing the output tensors before the side stream reads.
+                if gpu_event is not None:
+                    d2h_stream.wait_event(gpu_event)
+                pack_diffusion_output_shm(output, d2h_stream=d2h_stream)
                 d2h_stream.synchronize()
-
-                # Tensors are now in pinned CPU memory; SHM packing is host-only.
-                pack_diffusion_output_shm(output)
 
                 self.result_mq.enqueue(
                     AsyncDiffusionOutput(
