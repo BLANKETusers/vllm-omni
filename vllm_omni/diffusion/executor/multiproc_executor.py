@@ -101,6 +101,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         self._rpc_id_lock = threading.Lock()
         self._rpc_futures: dict[str, concurrent.futures.Future[AsyncDiffusionOutput]] = {}
         self._output_futures: dict[str, concurrent.futures.Future[DiffusionOutput]] = {}
+        self._completed_outputs: dict[str, DiffusionOutput] = {}
         self._futures_lock = threading.RLock()
         self._pump_running = False
         self._pump_stop = threading.Event()
@@ -341,6 +342,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                     exec_all_ranks=True,
                 )
                 if isinstance(result, AsyncDiffusionOutput) and result.kind == AsyncDiffusionOutput.COMPUTE_DONE:
+                    logger.info("[ASYNC] execute_request got COMPUTE_DONE token=%s", result.output_token)
                     runner_outputs.append(
                         RunnerOutput(
                             request_id=new_req.request_id,
@@ -439,6 +441,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             "execute_model",
             "execute_model_batch",
         ):
+            logger.info("[ASYNC] collective_rpc async path method=%s", method)
             rpc_id = self._next_rpc_id()
             rpc_request["rpc_id"] = rpc_id
             fut: concurrent.futures.Future = concurrent.futures.Future()
@@ -484,7 +487,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         self._pump_stop.clear()
         self._result_pump_thread = threading.Thread(target=self._result_pump, daemon=True, name="DiffusionResultPump")
         self._result_pump_thread.start()
-        logger.info("Async result pump started")
+        logger.info("[ASYNC] result pump started")
 
     def _result_pump(self) -> None:
         """Sole reader of result_mq when async output is enabled.
@@ -498,6 +501,11 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                 msg = self._result_mq.dequeue(timeout=1.0)
             except Exception:
                 continue
+
+            if isinstance(msg, AsyncDiffusionOutput):
+                logger.info("[ASYNC] pump recv kind=%s rpc_id=%s token=%s", msg.kind, msg.rpc_id, msg.output_token)
+            else:
+                logger.info("[ASYNC] pump recv non-envelope msg type=%s", type(msg).__name__)
 
             if not isinstance(msg, AsyncDiffusionOutput):
                 # Sync-path message: set on the most recent unfulfilled rpc future
@@ -522,6 +530,14 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                     else:
                         unpack_diffusion_output_shm(msg.output)
                         fut.set_result(msg.output)
+                elif msg.output_token:
+                    # Race: OUTPUT_READY arrived before wait_output_ready()
+                    # registered the future.  Cache it so wait_output_ready
+                    # can resolve immediately.
+                    if not msg.error:
+                        unpack_diffusion_output_shm(msg.output)
+                    with self._futures_lock:
+                        self._completed_outputs[msg.output_token] = msg.output
 
     def _next_rpc_id(self) -> str:
         with self._rpc_id_lock:
@@ -532,10 +548,26 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         """Return a Future that resolves when the async output is ready.
 
         The Future is fulfilled by the result_pump when an OUTPUT_READY
-        message with the matching output_token arrives.
+        message with the matching output_token arrives.  If the message
+        already arrived before this call, returns an already-resolved Future.
         """
+        with self._futures_lock:
+            # Handle race: OUTPUT_READY may have arrived before we registered.
+            cached = self._completed_outputs.pop(output_token, None)
+            if cached is not None:
+                logger.info("[ASYNC] wait_output_ready: cache HIT token=%s", output_token)
+                fut: concurrent.futures.Future = concurrent.futures.Future()
+                fut.set_result(cached)
+                return fut
+            logger.info("[ASYNC] wait_output_ready: cache MISS token=%s (registering future)", output_token)
         fut: concurrent.futures.Future = concurrent.futures.Future()
         with self._futures_lock:
+            # Double-check: OUTPUT_READY may have arrived in the tiny window
+            # between our first check and the registration below.
+            cached = self._completed_outputs.pop(output_token, None)
+            if cached is not None:
+                fut.set_result(cached)
+                return fut
             self._output_futures[output_token] = fut
         return fut
 
