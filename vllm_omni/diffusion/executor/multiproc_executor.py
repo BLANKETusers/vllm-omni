@@ -495,6 +495,8 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             try:
                 msg = self._result_mq.dequeue(timeout=1.0)
             except Exception:
+                if self.is_failed:
+                    raise EngineDeadError()
                 continue
 
             if not isinstance(msg, AsyncDiffusionOutput):
@@ -518,14 +520,19 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                     if msg.error:
                         fut.set_exception(RuntimeError(msg.error))
                     else:
-                        unpack_diffusion_output_shm(msg.output)
+                        try:
+                            unpack_diffusion_output_shm(msg.output)
+                        except Exception as e:
+                            logger.exception("SHM unpack failed in result pump")
+                            fut.set_exception(e)
+                            continue
                         fut.set_result(msg.output)
                 elif msg.output_token:
-                    # Race: OUTPUT_READY arrived before wait_output_ready()
-                    # registered the future.  Cache it so wait_output_ready
-                    # can resolve immediately.
                     if not msg.error:
-                        unpack_diffusion_output_shm(msg.output)
+                        try:
+                            unpack_diffusion_output_shm(msg.output)
+                        except Exception:
+                            logger.exception("SHM unpack failed in result pump (cached)")
                     with self._futures_lock:
                         self._completed_outputs[msg.output_token] = msg.output
 
@@ -535,27 +542,14 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             return str(self._rpc_id_counter)
 
     def wait_output_ready(self, output_token: str) -> concurrent.futures.Future[DiffusionOutput]:
-        """Return a Future that resolves when the async output is ready.
-
-        The Future is fulfilled by the result_pump when an OUTPUT_READY
-        message with the matching output_token arrives.  If the message
-        already arrived before this call, returns an already-resolved Future.
-        """
+        """Return a Future that resolves when the async output is ready."""
         with self._futures_lock:
-            # Handle race: OUTPUT_READY may have arrived before we registered.
             cached = self._completed_outputs.pop(output_token, None)
             if cached is not None:
                 fut: concurrent.futures.Future = concurrent.futures.Future()
                 fut.set_result(cached)
                 return fut
-        fut: concurrent.futures.Future = concurrent.futures.Future()
-        with self._futures_lock:
-            # Double-check: OUTPUT_READY may have arrived in the tiny window
-            # between our first check and the registration below.
-            cached = self._completed_outputs.pop(output_token, None)
-            if cached is not None:
-                fut.set_result(cached)
-                return fut
+            fut: concurrent.futures.Future = concurrent.futures.Future()
             self._output_futures[output_token] = fut
         return fut
 

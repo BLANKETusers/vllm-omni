@@ -790,13 +790,16 @@ class WorkerProc:
         self.worker = self._create_worker(gpu_id, od_config, worker_extension_cls, custom_pipeline_args)
         self._running = True
 
-        self._async_output_queue: queue.Queue = queue.Queue()
-        self._async_output_thread = threading.Thread(
-            target=self._async_output_loop,
-            daemon=True,
-            name="DiffusionAsyncOutput",
-        )
-        self._async_output_thread.start()
+        self._async_output_queue: queue.Queue | None = None
+        self._async_output_thread: threading.Thread | None = None
+        if self.od_config.enable_async_diffusion_output:
+            self._async_output_queue = queue.Queue()
+            self._async_output_thread = threading.Thread(
+                target=self._async_output_loop,
+                daemon=True,
+                name="DiffusionAsyncOutput",
+            )
+            self._async_output_thread.start()
 
     @staticmethod
     def _generate_output_token() -> str:
@@ -810,6 +813,7 @@ class WorkerProc:
             event.record()
             return event
         except Exception:
+            logger.warning("Failed to record CUDA event for cross-stream sync")
             return None
 
     def _create_worker(
@@ -844,13 +848,13 @@ class WorkerProc:
             try:
                 output_token = WorkerProc._generate_output_token()
                 gpu_event = WorkerProc._record_gpu_event()
+                self._async_output_queue.put((output, output_token, gpu_event))
                 msg = AsyncDiffusionOutput(
                     kind=AsyncDiffusionOutput.COMPUTE_DONE,
                     rpc_id=rpc_id,
                     output_token=output_token,
                 )
                 self.result_mq.enqueue(msg)
-                self._async_output_queue.put((output, output_token, gpu_event))
                 return
             except Exception as e:
                 logger.warning("Async output submission failed, falling back to sync: %s", e)
@@ -869,10 +873,10 @@ class WorkerProc:
         Uses a side CUDA stream so the D2H transfer does not block the GPU
         default stream where the next forward runs.
         """
+        d2h_stream = torch.cuda.Stream()
         while self._running:
             output, output_token, gpu_event = self._async_output_queue.get()
             try:
-                d2h_stream = torch.cuda.Stream()
                 # Cross-stream ordering: wait for default stream to finish
                 # writing the output tensors before the side stream reads.
                 if gpu_event is not None:
