@@ -870,8 +870,7 @@ class WorkerProc:
         default stream where the next forward runs.
         """
         while self._running:
-            item = self._async_output_queue.get()
-            output, output_token, gpu_event = item
+            output, output_token, gpu_event = self._async_output_queue.get()
             try:
                 d2h_stream = torch.cuda.Stream()
                 # Cross-stream ordering: wait for default stream to finish

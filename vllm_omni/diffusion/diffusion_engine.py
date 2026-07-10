@@ -56,6 +56,8 @@ if TYPE_CHECKING:
 
 logger = init_logger(__name__)
 
+_ASYNC_OUTPUT_TIMEOUT = 30.0  # seconds
+
 __all__ = [
     "DiffusionEngine",
     "_RpcTask",
@@ -787,7 +789,7 @@ class DiffusionEngine:
                     )
                     if output.output_token:
                         fut = self.executor.wait_output_ready(output.output_token)
-                        output = fut.result(timeout=30.0)
+                        output = fut.result(timeout=_ASYNC_OUTPUT_TIMEOUT)
                     return output
 
     def profile(self, is_start: bool = True, profile_prefix: str | None = None) -> None:
