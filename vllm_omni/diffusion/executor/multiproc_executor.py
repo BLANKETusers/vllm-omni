@@ -435,11 +435,8 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             "collect_rank_status": collect_rank_status,
         }
 
-        # Async path: generate rpc_id, wait on future set by result_pump.
-        if self.od_config.enable_async_diffusion_output and method in (
-            "execute_model",
-            "execute_model_batch",
-        ):
+        # Async path: all RPCs go through result_pump when async is enabled.
+        if self.od_config.enable_async_diffusion_output:
             rpc_id = self._next_rpc_id()
             rpc_request["rpc_id"] = rpc_id
             fut: concurrent.futures.Future = concurrent.futures.Future()
