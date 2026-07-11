@@ -1288,7 +1288,6 @@ class AsyncDiffusionOutput:
 
     kind: str
     rpc_id: str | None = None
-    req_id: str = ""
     output_token: str | None = None
     result: Any | None = None
     output: DiffusionOutput | None = None

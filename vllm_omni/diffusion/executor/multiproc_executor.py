@@ -425,7 +425,10 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
 
         execute_all_ranks = unique_reply_rank is None or exec_all_ranks
         collect_rank_status = unique_reply_rank is None
-        rpc_request: dict[str, Any] = {
+        rpc_id: str | None = None
+        if self.od_config.enable_async_diffusion_output:
+            rpc_id = self._next_rpc_id()
+        rpc_request = {
             "type": "rpc",
             "method": method,
             "args": args,
@@ -433,12 +436,14 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             "output_rank": unique_reply_rank if unique_reply_rank is not None else 0,
             "exec_all_ranks": execute_all_ranks,
             "collect_rank_status": collect_rank_status,
+            # rpc_id: None for sync path (worker ignores it);
+            # unique ID for async path (used by result_pump to route
+            # rpc_result / compute_done back to the calling Future).
+            "rpc_id": rpc_id,
         }
 
         # Async path: all RPCs go through result_pump when async is enabled.
         if self.od_config.enable_async_diffusion_output:
-            rpc_id = self._next_rpc_id()
-            rpc_request["rpc_id"] = rpc_id
             fut: concurrent.futures.Future = concurrent.futures.Future()
             with self._futures_lock:
                 self._rpc_futures[rpc_id] = fut
@@ -495,12 +500,16 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             try:
                 msg = self._result_mq.dequeue(timeout=1.0)
             except Exception:
+                logger.exception("Result pump dequeue failed")
                 if self.is_failed:
-                    raise EngineDeadError()
+                    break
                 continue
 
             if not isinstance(msg, AsyncDiffusionOutput):
-                # Sync-path message: set on the most recent unfulfilled rpc future
+                # Sync-path message: set on the most recent unfulfilled rpc future.
+                # This is a defensive fallback — async mode should only receive
+                # AsyncDiffusionOutput messages.  If we get here, something is wrong.
+                logger.warning("Received non-async message in result pump: %s", type(msg).__name)
                 with self._futures_lock:
                     for fut in self._rpc_futures.values():
                         if not fut.done():
