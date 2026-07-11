@@ -3,6 +3,7 @@ from __future__ import annotations
 import concurrent.futures
 import multiprocessing as mp
 import multiprocessing.connection
+import queue
 import threading
 import time
 import weakref
@@ -105,6 +106,9 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         self._futures_lock = threading.RLock()
         self._pump_running = False
         self._pump_stop = threading.Event()
+        # When pump is active it is the sole reader of result_mq; non-async
+        # messages are placed here for collective_rpc() to consume.
+        self._sync_result_buffer: queue.Queue = queue.Queue()
         if self.od_config.enable_async_diffusion_output:
             self._start_result_pump()
 
@@ -130,7 +134,12 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             raise RuntimeError("Result queue not initialized")
 
     def _dequeue_one_with_failure_polling(self, deadline: float | None, method: str) -> Any:
-        """Block until one result message, polling ``is_failed`` between chunk timeouts."""
+        """Block until one result message, polling ``is_failed`` between chunk timeouts.
+
+        When async output is enabled, pump is the sole reader of result_mq;
+        non-async messages are placed in _sync_result_buffer, so this method
+        reads from there instead of result_mq directly.
+        """
         while True:
             if deadline is None:
                 chunk_timeout = _DEQUEUE_TIMEOUT_S
@@ -139,12 +148,20 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                 if remaining <= 0:
                     raise TimeoutError(f"RPC call to {method} timed out.")
                 chunk_timeout = min(_DEQUEUE_TIMEOUT_S, remaining)
-            try:
-                return self._result_mq.dequeue(timeout=chunk_timeout)
-            except (TimeoutError, zmq.error.Again):
-                if self.is_failed:
-                    raise EngineDeadError()
-                continue
+            if self.od_config.enable_async_diffusion_output:
+                try:
+                    return self._sync_result_buffer.get(timeout=chunk_timeout)
+                except queue.Empty:
+                    if self.is_failed or self._closed:
+                        raise EngineDeadError()
+                    continue
+            else:
+                try:
+                    return self._result_mq.dequeue(timeout=chunk_timeout)
+                except (TimeoutError, zmq.error.Again):
+                    if self.is_failed:
+                        raise EngineDeadError()
+                    continue
 
     @staticmethod
     def _raise_for_rpc_error_dict(response: Any) -> None:
@@ -425,9 +442,6 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
 
         execute_all_ranks = unique_reply_rank is None or exec_all_ranks
         collect_rank_status = unique_reply_rank is None
-        rpc_id: str | None = None
-        if self.od_config.enable_async_diffusion_output:
-            rpc_id = self._next_rpc_id()
         rpc_request = {
             "type": "rpc",
             "method": method,
@@ -436,14 +450,14 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             "output_rank": unique_reply_rank if unique_reply_rank is not None else 0,
             "exec_all_ranks": execute_all_ranks,
             "collect_rank_status": collect_rank_status,
-            # rpc_id: None for sync path (worker ignores it);
-            # unique ID for async path (used by result_pump to route
-            # rpc_result / compute_done back to the calling Future).
-            "rpc_id": rpc_id,
         }
 
-        # Async path: all RPCs go through result_pump when async is enabled.
-        if self.od_config.enable_async_diffusion_output:
+        # ── Path 1: async execute_model ──
+        # Only execute_model needs the compute_done/output_ready split;
+        # pump routes the result back to a Future via rpc_id.
+        if self.od_config.enable_async_diffusion_output and method == "execute_model":
+            rpc_id = self._next_rpc_id()
+            rpc_request["rpc_id"] = rpc_id
             fut: concurrent.futures.Future = concurrent.futures.Future()
             with self._futures_lock:
                 self._rpc_futures[rpc_id] = fut
@@ -455,7 +469,22 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                     self._rpc_futures.pop(rpc_id, None)
                 raise TimeoutError(f"RPC call to {method} timed out.")
 
-        # Sync path (original).
+        # ── Path 2: async-enabled, but not execute_model ──
+        # Pump is the sole reader of result_mq.  Non-AsyncDiffusionOutput
+        # messages are placed in _sync_result_buffer for us to consume here.
+        if self.od_config.enable_async_diffusion_output:
+            self._broadcast_mq.enqueue(rpc_request)
+            response = self._dequeue_one_with_failure_polling(deadline, method)
+
+            try:
+                unpack_diffusion_output_shm(response)
+            except Exception as e:
+                logger.warning("SHM unpack failed (data may already be inline): %s", e)
+
+            response = MultiprocDiffusionExecutor._handle_rpc_response(response)
+            return response
+
+        # ── Path 3: async not enabled (original sync path) ──
         try:
             self._broadcast_mq.enqueue(rpc_request)
 
@@ -511,15 +540,9 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                 continue
 
             if not isinstance(msg, AsyncDiffusionOutput):
-                # Sync-path message: set on the most recent unfulfilled rpc future.
-                # This is a defensive fallback — async mode should only receive
-                # AsyncDiffusionOutput messages.  If we get here, something is wrong.
-                logger.warning("Received non-async message in result pump: %s", type(msg).__name__)
-                with self._futures_lock:
-                    for fut in self._rpc_futures.values():
-                        if not fut.done():
-                            fut.set_result(msg)
-                            break
+                # Non-async message: place into the sync buffer for
+                # collective_rpc() to consume via Path 2.
+                self._sync_result_buffer.put(msg)
                 continue
 
             if msg.kind in (AsyncDiffusionOutput.RPC_RESULT, AsyncDiffusionOutput.COMPUTE_DONE):
