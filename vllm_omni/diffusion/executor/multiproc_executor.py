@@ -499,6 +499,11 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         while not self._pump_stop.is_set():
             try:
                 msg = self._result_mq.dequeue(timeout=1.0)
+            except TimeoutError:
+                # Idle poll timeout — no result available this round; retry.
+                if self.is_failed:
+                    break
+                continue
             except Exception:
                 logger.exception("Result pump dequeue failed")
                 if self.is_failed:
