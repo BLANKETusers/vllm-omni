@@ -514,7 +514,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                 # Sync-path message: set on the most recent unfulfilled rpc future.
                 # This is a defensive fallback — async mode should only receive
                 # AsyncDiffusionOutput messages.  If we get here, something is wrong.
-                logger.warning("Received non-async message in result pump: %s", type(msg).__name)
+                logger.warning("Received non-async message in result pump: %s", type(msg).__name__)
                 with self._futures_lock:
                     for fut in self._rpc_futures.values():
                         if not fut.done():
