@@ -259,7 +259,7 @@ class DiffusionEngine:
         # Async mode: wait for background D2H/SHM to complete.
         if output.output_token:
             fut = self.executor.wait_output_ready(output.output_token)
-            output = await asyncio.wrap_future(fut)
+            output = await asyncio.wait_for(asyncio.wrap_future(fut), timeout=_ASYNC_OUTPUT_TIMEOUT)
 
         return self.postprocess_output(request, output, diffusion_engine_start_time, preprocess_time, exec_total_time)
 
@@ -282,7 +282,7 @@ class DiffusionEngine:
 
             if output.output_token:
                 fut = self.executor.wait_output_ready(output.output_token)
-                output = await asyncio.wrap_future(fut)
+                output = await asyncio.wait_for(asyncio.wrap_future(fut), timeout=_ASYNC_OUTPUT_TIMEOUT)
 
             yield self.postprocess_output(
                 request, output, diffusion_engine_start_time, preprocess_time, exec_total_time
