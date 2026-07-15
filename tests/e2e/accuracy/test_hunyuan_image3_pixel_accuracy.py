@@ -100,7 +100,7 @@ def _run_vllm_omni_hunyuan_image3_online(*, model: str, deploy_config: str, outp
         "--trust-remote-code",
     ]
     with OmniServer(
-        model, server_args, use_omni=True, env_dict={"HUNYUAN_IMAGE3_MOE_BACKEND": "flashinfer_trtllm"}
+        model, server_args, use_omni=True, env_dict={"HUNYUAN_IMAGE3_MOE_BACKEND": "flashinfer_cutlass"}
     ) as omni_server:
         response = requests.post(
             f"http://{omni_server.host}:{omni_server.port}/v1/images/generations",
@@ -164,7 +164,7 @@ def _run_vllm_omni_hunyuan_image3_offline(*, model: str, deploy_config: str, out
             "--enforce-eager",
         ],
         check=True,
-        env={**os.environ, "HUNYUAN_IMAGE3_MOE_BACKEND": "flashinfer_trtllm"},
+        env={**os.environ, "HUNYUAN_IMAGE3_MOE_BACKEND": "flashinfer_cutlass"},
     )
     images = sorted(Path(output_dir).glob("output_*.png"))
     assert images, f"No output image found in {output_dir}"
