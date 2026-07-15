@@ -83,7 +83,7 @@ class HunyuanFusedMoEDefault:
         from vllm.config import get_current_vllm_config
         from vllm.model_executor.layers.fused_moe import FusedMoE as _FusedMoE
 
-        moe_backend = os.environ.get("HUNYUAN_IMAGE3_MOE_BACKEND", "flashinfer_trtllm")
+        moe_backend = os.environ.get("HUNYUAN_IMAGE3_MOE_BACKEND", "flashinfer_cutlass")
         vllm_config = get_current_vllm_config()
         logger.warning(
             "HunyuanFusedMoEDefault: overriding moe_backend %s -> %s",

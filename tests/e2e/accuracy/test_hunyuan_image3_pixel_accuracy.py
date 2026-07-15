@@ -46,7 +46,7 @@ _DEPLOY_CONFIG = {
             "gpu_memory_utilization": 0.9,
             "enforce_eager": True,
             "trust_remote_code": True,
-            "moe_backend": "flashinfer_trtllm",
+            "moe_backend": "flashinfer_cutlass",
             "devices": "0,1,2,3",  # set dynamically by _write_deploy_config
             "vae_use_slicing": False,
             "vae_use_tiling": False,
