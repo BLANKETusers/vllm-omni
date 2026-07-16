@@ -341,7 +341,23 @@ def get_hunyuan_image3_post_process_func(od_config: OmniDiffusionConfig):
 
     image_processor = VaeImageProcessor()
 
-    def post_process_func(images: torch.Tensor):
+    def post_process_func(images: torch.Tensor | dict):
+        # Handle dict envelope format (upstream): {"payload": {"image": ...}, "metadata": ...}
+        if isinstance(images, dict) and "payload" in images:
+            tensor = images["payload"].get("image")
+            if tensor is None:
+                return images
+            if tensor.dim() == 3:
+                tensor = tensor.unsqueeze(0)
+            do_denormalize = [True] * tensor.shape[0]
+            images["payload"]["image"] = image_processor.postprocess(
+                tensor,
+                output_type=_HUNYUAN_DEFAULT_OUTPUT_TYPE,
+                do_denormalize=do_denormalize,
+            )
+            return images
+
+        # Legacy raw tensor format
         if images.dim() == 3:
             images = images.unsqueeze(0)
         do_denormalize = [True] * images.shape[0]
@@ -2230,7 +2246,6 @@ class HunyuanImage3Pipeline(
         if output_type == "latent":
             return DiffusionOutput(
                 output=latents,
-                custom_output={},
                 stage_durations=getattr(self, "stage_durations", None),
             )
 
@@ -2249,12 +2264,14 @@ class HunyuanImage3Pipeline(
         # Postprocess deferred to engine post_process_func for overlap with next request.
 
         cot_text_list = state.extra.get(_STEP_COT_TEXT_LIST) or []
-        custom_output = {}
+        metadata = {}
         if any(text is not None for text in cot_text_list):
-            custom_output["ar_generated_text"] = cot_text_list[0]
+            metadata["text"] = {"ar_generated_text": cot_text_list[0]}
         return DiffusionOutput(
-            output=image,
-            custom_output=custom_output,
+            output={
+                "payload": {"image": image[0]},
+                "metadata": metadata,
+            },
             stage_durations=getattr(self, "stage_durations", None),
         )
 
@@ -2319,12 +2336,14 @@ class HunyuanImage3Pipeline(
 
         outputs = self._generate(**model_inputs, **kwargs)
         image = outputs[0]
-        custom_output = {}
+        metadata = {}
         if any(t is not None for t in cot_text_list):
-            custom_output["ar_generated_text"] = cot_text_list[0] if len(cot_text_list) == 1 else cot_text_list
+            metadata["text"] = {"ar_generated_text": cot_text_list[0] if len(cot_text_list) == 1 else cot_text_list}
         stage_durations = self.stage_durations if hasattr(self, "stage_durations") else None
         return DiffusionOutput(
-            output=image,
-            custom_output=custom_output,
+            output={
+                "payload": {"image": image},
+                "metadata": metadata,
+            },
             stage_durations=stage_durations,
         )
