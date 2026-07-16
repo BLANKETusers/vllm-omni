@@ -778,7 +778,16 @@ def build_vllm_config(
 
         filtered_engine_args_dict["structured_outputs_config"] = StructuredOutputsConfig(**soc)
 
+    moe_backend_in = filtered_engine_args_dict.get("moe_backend", "<not set>")
+    logger.warning(
+        "[MOE_DEBUG] build_vllm_config: moe_backend in engine_args_dict = %s",
+        moe_backend_in,
+    )
     omni_engine_args = OmniEngineArgs(**filtered_engine_args_dict)
+    logger.warning(
+        "[MOE_DEBUG] build_vllm_config: moe_backend in OmniEngineArgs = %s",
+        omni_engine_args.moe_backend,
+    )
 
     # Multi-stage pipelines (qwen3_tts code2wav, etc.) set max_model_len
     # larger than HF max_position_embeddings by design. vLLM's validator

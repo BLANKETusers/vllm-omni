@@ -85,7 +85,9 @@ def _write_deploy_config(path: Path) -> None:
     devices = _devices()
     config["stages"][0]["devices"] = devices
     config["stages"][0]["parallel_config"]["tensor_parallel_size"] = len(devices.split(","))
-    path.write_text(yaml.dump(config, default_flow_style=False, sort_keys=False))
+    yaml_content = yaml.dump(config, default_flow_style=False, sort_keys=False)
+    path.write_text(yaml_content)
+    print(f"[MOE_DEBUG] deploy YAML:\n{yaml_content}")
 
 
 def _run_vllm_omni_hunyuan_image3_online(*, model: str, deploy_config: str, output_path: Path) -> Image.Image:
@@ -101,6 +103,7 @@ def _run_vllm_omni_hunyuan_image3_online(*, model: str, deploy_config: str, outp
         "--moe-backend",
         "flashinfer_cutlass",
     ]
+    print(f"[MOE_DEBUG] online server_args: {' '.join(server_args)}")
     with OmniServer(model, server_args, use_omni=True) as omni_server:
         response = requests.post(
             f"http://{omni_server.host}:{omni_server.port}/v1/images/generations",
@@ -133,6 +136,7 @@ def _run_vllm_omni_hunyuan_image3_offline(*, model: str, deploy_config: str, out
     import sys
 
     output_dir = str(output_path.parent)
+    print("[MOE_DEBUG] offline env HUNYUAN_IMAGE3_MOE_BACKEND=flashinfer_cutlass")
     subprocess.run(
         [
             sys.executable,
