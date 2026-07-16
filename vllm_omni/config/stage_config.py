@@ -764,6 +764,7 @@ _PIPELINE_WIDE_ENGINE_FIELDS: tuple[str, ...] = (
     "pipeline_parallel_size",
     "active_stream_window",
     "custom_voice_dir",
+    "enable_async_diffusion_output",
 )
 PIPELINE_WIDE_ENGINE_FIELDS = _PIPELINE_WIDE_ENGINE_FIELDS
 
