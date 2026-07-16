@@ -834,7 +834,7 @@ class WorkerProc:
             return
 
         # Async path: enqueue compute_done immediately, bg thread does D2H+SHM.
-        if self.od_config.enable_async_diffusion_output and isinstance(output, DiffusionOutput):
+        if self.od_config.enable_async_diffusion_output and isinstance(output, (DiffusionOutput, BatchRunnerOutput)):
             async_output_id = WorkerProc._generate_async_output_id()
             gpu_event = current_omni_platform.record_gpu_event()
             self._async_output_queue.put((output, async_output_id, gpu_event))

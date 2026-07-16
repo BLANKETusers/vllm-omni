@@ -396,6 +396,11 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
 
         The worker builds DiffusionRequestBatch from scheduler output and returns
         BatchRunnerOutput with one RunnerOutput per scheduled request.
+
+        When async output is enabled the D2H copy runs on a side CUDA stream
+        in the worker background thread, overlapping with the next forward on
+        the default stream.  The executor waits for D2H completion inline so
+        the caller still receives a fully materialised BatchRunnerOutput.
         """
         from vllm_omni.diffusion.worker.utils import BatchRunnerOutput
 
@@ -406,6 +411,9 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             unique_reply_rank=0,
             exec_all_ranks=True,
         )
+        if isinstance(result, AsyncDiffusionOutput) and result.kind == AsyncOutputKind.COMPUTE_DONE:
+            fut = self.wait_output_ready(result.async_output_id)
+            result = fut.result(timeout=30.0)
         if not isinstance(result, BatchRunnerOutput):
             raise RuntimeError(f"Unexpected response type for execute_batch: {type(result)!r}")
         return result
@@ -452,10 +460,12 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             "collect_rank_status": collect_rank_status,
         }
 
-        # ── Path 1: async execute_model ──
-        # Only execute_model needs the compute_done/output_ready split;
+        # ── Path 1: async execute_model / execute_model_batch ──
+        # Request-mode methods get the compute_done/output_ready split
+        # so the D2H copy runs on a side stream in the worker background
+        # thread while the default stream is free for the next forward.
         # pump routes the result back to a Future via rpc_id.
-        if self.od_config.enable_async_diffusion_output and method == "execute_model":
+        if self.od_config.enable_async_diffusion_output and method in ("execute_model", "execute_model_batch"):
             rpc_id = self._next_rpc_id()
             rpc_request["rpc_id"] = rpc_id
             fut: concurrent.futures.Future = concurrent.futures.Future()
