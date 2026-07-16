@@ -7,7 +7,7 @@ import random
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, fields
 from enum import Enum
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any
 
 import diffusers
 import torch
@@ -1209,7 +1209,7 @@ class DiffusionOutput:
     trajectory_latents: torch.Tensor | dict[str, Any] | None = None
     trajectory_log_probs: torch.Tensor | dict[str, Any] | None = None
     trajectory_decoded: list[Image.Image] | None = None
-    output_token: str | None = None
+    async_output_id: str | None = None
     error: str | None = None
     error_status_code: int | None = None
     error_type: str | None = None
@@ -1268,27 +1268,33 @@ class DiffusionOutput:
         )
 
 
+class AsyncOutputKind(Enum):
+    """Enum for ``AsyncDiffusionOutput.kind`` — the message type that routes
+    async diffusion output to the correct consumer.
+
+    * ``RPC_RESULT`` — ordinary RPC return (sleep, wake, profile, etc.)
+    * ``COMPUTE_DONE`` — worker forward finished, GPU can start next request
+    * ``OUTPUT_READY`` — background D2H/SHM packing finished, final output
+      is available via ``async_output_id``
+    """
+
+    RPC_RESULT = "rpc_result"
+    COMPUTE_DONE = "compute_done"
+    OUTPUT_READY = "output_ready"
+
+
 @dataclass
 class AsyncDiffusionOutput:
     """Async protocol envelope for ``result_mq`` messages.
 
     When ``enable_async_diffusion_output`` is True, all ``result_mq``
     messages use this envelope.  The ``kind`` field routes the message
-    to the correct consumer:
-
-    * ``RPC_RESULT`` — ordinary RPC return (sleep, wake, profile, etc.)
-    * ``COMPUTE_DONE`` — worker forward finished, GPU can start next request
-    * ``OUTPUT_READY`` — background D2H/SHM packing finished, final output
-      is available via ``output_token``
+    to the correct consumer.
     """
 
-    RPC_RESULT: ClassVar[str] = "rpc_result"
-    COMPUTE_DONE: ClassVar[str] = "compute_done"
-    OUTPUT_READY: ClassVar[str] = "output_ready"
-
-    kind: str
+    kind: AsyncOutputKind
     rpc_id: str | None = None
-    output_token: str | None = None
+    async_output_id: str | None = None
     result: Any | None = None
     output: DiffusionOutput | None = None
     error: str | None = None

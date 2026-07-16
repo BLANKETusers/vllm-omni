@@ -157,6 +157,13 @@ class OmniPlatform(Platform):
     def synchronize(cls) -> None:
         raise NotImplementedError
 
+    # ── Async diffusion output: Stream / Event helpers ──
+
+    @classmethod
+    def record_gpu_event(cls):
+        """Record a GPU event on the default stream to mark tensor readiness."""
+        raise NotImplementedError
+
     @classmethod
     def get_free_memory(cls, device: torch.device | None = None) -> int:
         raise NotImplementedError

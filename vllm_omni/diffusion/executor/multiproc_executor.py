@@ -16,7 +16,7 @@ from vllm.distributed.device_communicators.shm_broadcast import MessageQueue
 from vllm.logger import init_logger
 from vllm.v1.engine.exceptions import EngineDeadError
 
-from vllm_omni.diffusion.data import SHUTDOWN_MESSAGE, AsyncDiffusionOutput, DiffusionOutput
+from vllm_omni.diffusion.data import SHUTDOWN_MESSAGE, AsyncDiffusionOutput, AsyncOutputKind, DiffusionOutput
 from vllm_omni.diffusion.executor.abstract import DiffusionExecutor
 from vllm_omni.diffusion.ipc import DIFFUSION_RPC_RESULT_ENVELOPE, unpack_diffusion_output_shm
 from vllm_omni.diffusion.worker import WorkerProc
@@ -342,7 +342,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         """Adapt request-mode scheduler output to worker execute_model RPCs.
 
         Returns a BatchRunnerOutput with one RunnerOutput per scheduled request.
-        In async mode the result may carry output_token instead of the final output.
+        In async mode the result may carry async_output_id instead of the final output.
         """
         from vllm_omni.diffusion.worker.utils import BatchRunnerOutput, RunnerOutput
 
@@ -358,14 +358,14 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                     unique_reply_rank=0,
                     exec_all_ranks=True,
                 )
-                if isinstance(result, AsyncDiffusionOutput) and result.kind == AsyncDiffusionOutput.COMPUTE_DONE:
+                if isinstance(result, AsyncDiffusionOutput) and result.kind == AsyncOutputKind.COMPUTE_DONE:
                     runner_outputs.append(
                         RunnerOutput(
                             request_id=new_req.request_id,
                             step_index=None,
                             finished=True,
                             result=None,
-                            output_token=result.output_token,
+                            async_output_id=result.async_output_id,
                         )
                     )
                 elif isinstance(result, DiffusionOutput):
@@ -523,7 +523,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
 
         Dispatches AsyncDiffusionOutput messages to the appropriate future:
         * RPC_RESULT / COMPUTE_DONE → _rpc_futures[rpc_id]
-        * OUTPUT_READY → _output_futures[output_token]
+        * OUTPUT_READY → _output_futures[async_output_id]
         """
         while not self._pump_stop.is_set():
             try:
@@ -545,14 +545,14 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                 self._sync_result_buffer.put(msg)
                 continue
 
-            if msg.kind in (AsyncDiffusionOutput.RPC_RESULT, AsyncDiffusionOutput.COMPUTE_DONE):
+            if msg.kind in (AsyncOutputKind.RPC_RESULT, AsyncOutputKind.COMPUTE_DONE):
                 with self._futures_lock:
                     fut = self._rpc_futures.pop(msg.rpc_id, None) if msg.rpc_id else None
                 if fut is not None and not fut.done():
                     fut.set_result(msg)
-            elif msg.kind == AsyncDiffusionOutput.OUTPUT_READY:
+            elif msg.kind == AsyncOutputKind.OUTPUT_READY:
                 with self._futures_lock:
-                    fut = self._output_futures.pop(msg.output_token, None) if msg.output_token else None
+                    fut = self._output_futures.pop(msg.async_output_id, None) if msg.async_output_id else None
                 if fut is not None and not fut.done():
                     if msg.error:
                         fut.set_exception(RuntimeError(msg.error))
@@ -564,30 +564,30 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                             fut.set_exception(e)
                             continue
                         fut.set_result(msg.output)
-                elif msg.output_token:
+                elif msg.async_output_id:
                     if not msg.error:
                         try:
                             unpack_diffusion_output_shm(msg.output)
                         except Exception:
                             logger.exception("SHM unpack failed in result pump (cached)")
                     with self._futures_lock:
-                        self._completed_outputs[msg.output_token] = msg.output
+                        self._completed_outputs[msg.async_output_id] = msg.output
 
     def _next_rpc_id(self) -> str:
         with self._rpc_id_lock:
             self._rpc_id_counter += 1
             return str(self._rpc_id_counter)
 
-    def wait_output_ready(self, output_token: str) -> concurrent.futures.Future[DiffusionOutput]:
+    def wait_output_ready(self, async_output_id: str) -> concurrent.futures.Future[DiffusionOutput]:
         """Return a Future that resolves when the async output is ready."""
         with self._futures_lock:
-            cached = self._completed_outputs.pop(output_token, None)
+            cached = self._completed_outputs.pop(async_output_id, None)
             if cached is not None:
                 fut: concurrent.futures.Future = concurrent.futures.Future()
                 fut.set_result(cached)
                 return fut
             fut: concurrent.futures.Future = concurrent.futures.Future()
-            self._output_futures[output_token] = fut
+            self._output_futures[async_output_id] = fut
         return fut
 
     def check_health(self) -> None:

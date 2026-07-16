@@ -11,7 +11,6 @@ import asyncio
 import concurrent.futures
 import dataclasses
 import json
-import os
 import queue
 import threading
 import time
@@ -1047,10 +1046,7 @@ class AsyncOmniEngine:
             **({"diffusion_attention_config": attention_config} if attention_config is not None else {}),
             "force_cutlass_fp8": bool(kwargs.get("force_cutlass_fp8", False)),
             "enable_diffusion_pipeline_profiler": kwargs.get("enable_diffusion_pipeline_profiler", False),
-            "enable_async_diffusion_output": kwargs.get(
-                "enable_async_diffusion_output",
-                os.environ.get("ENABLE_ASYNC_DIFFUSION_OUTPUT", "0") == "1",
-            ),
+            "enable_async_diffusion_output": kwargs.get("enable_async_diffusion_output", False),
             "streaming_output": kwargs.get("diffusion_streaming_output", False),
             "enable_ar_profiler": kwargs.get("enable_ar_profiler", False),
             "extras": {
@@ -1219,7 +1215,6 @@ class AsyncOmniEngine:
                 # Inject profiler flags for diffusion stages
                 for profiler_key in (
                     "enable_diffusion_pipeline_profiler",
-                    "enable_async_diffusion_output",
                     "enable_ar_profiler",
                 ):
                     val = kwargs.get(profiler_key)

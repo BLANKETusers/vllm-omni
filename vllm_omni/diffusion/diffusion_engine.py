@@ -170,6 +170,11 @@ class DiffusionEngine:
         )
 
         self.step_execution = bool(getattr(od_config, "step_execution", False))
+        if self.step_execution and getattr(od_config, "enable_async_diffusion_output", False):
+            raise ValueError(
+                "enable_async_diffusion_output and step_execution cannot be enabled "
+                "simultaneously — async output only supports request-mode execute_model."
+            )
         if self.od_config.streaming_output and not self.step_execution:
             logger.warning("streaming_output=True requires step_execution=True; enabling step execution.")
             self.od_config.step_execution = True
@@ -257,8 +262,8 @@ class DiffusionEngine:
         exec_total_time = time.perf_counter() - exec_start_time
 
         # Async mode: wait for background D2H/SHM to complete.
-        if output.output_token:
-            fut = self.executor.wait_output_ready(output.output_token)
+        if output.async_output_id:
+            fut = self.executor.wait_output_ready(output.async_output_id)
             output = await asyncio.wait_for(asyncio.wrap_future(fut), timeout=_ASYNC_OUTPUT_TIMEOUT)
 
         return self.postprocess_output(request, output, diffusion_engine_start_time, preprocess_time, exec_total_time)
@@ -280,8 +285,8 @@ class DiffusionEngine:
         async for output in generator:
             exec_total_time = time.perf_counter() - exec_start_time
 
-            if output.output_token:
-                fut = self.executor.wait_output_ready(output.output_token)
+            if output.async_output_id:
+                fut = self.executor.wait_output_ready(output.async_output_id)
                 output = await asyncio.wait_for(asyncio.wrap_future(fut), timeout=_ASYNC_OUTPUT_TIMEOUT)
 
             yield self.postprocess_output(
@@ -787,8 +792,8 @@ class DiffusionEngine:
                         runner_output=req_output,
                         missing_result_error="Diffusion execution finished without a final output.",
                     )
-                    if output.output_token:
-                        fut = self.executor.wait_output_ready(output.output_token)
+                    if output.async_output_id:
+                        fut = self.executor.wait_output_ready(output.async_output_id)
                         output = fut.result(timeout=_ASYNC_OUTPUT_TIMEOUT)
                     return output
 
@@ -1099,7 +1104,7 @@ class DiffusionEngine:
         if runner_output is not None and runner_output.result is not None:
             return runner_output.result
 
-        if runner_output is not None and runner_output.output_token is not None:
-            return DiffusionOutput(output_token=runner_output.output_token)
+        if runner_output is not None and runner_output.async_output_id is not None:
+            return DiffusionOutput(async_output_id=runner_output.async_output_id)
 
         return DiffusionOutput(error=missing_result_error)

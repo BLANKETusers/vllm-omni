@@ -34,6 +34,7 @@ from vllm.v1.worker.workspace import init_workspace_manager
 
 from vllm_omni.diffusion.data import (
     AsyncDiffusionOutput,
+    AsyncOutputKind,
     DiffusionOutput,
     OmniACK,
     OmniDiffusionConfig,
@@ -802,19 +803,8 @@ class WorkerProc:
             self._async_output_thread.start()
 
     @staticmethod
-    def _generate_output_token() -> str:
+    def _generate_async_output_id() -> str:
         return uuid.uuid4().hex
-
-    @staticmethod
-    def _record_gpu_event() -> torch.cuda.Event | None:
-        """Record a CUDA event on the default stream to mark tensor readiness."""
-        try:
-            event = torch.cuda.Event()
-            event.record()
-            return event
-        except Exception:
-            logger.warning("Failed to record CUDA event for cross-stream sync")
-            return None
 
     def _create_worker(
         self,
@@ -846,13 +836,13 @@ class WorkerProc:
         # Async path: enqueue compute_done immediately, bg thread does D2H+SHM.
         if self.od_config.enable_async_diffusion_output and isinstance(output, DiffusionOutput):
             try:
-                output_token = WorkerProc._generate_output_token()
-                gpu_event = WorkerProc._record_gpu_event()
-                self._async_output_queue.put((output, output_token, gpu_event))
+                async_output_id = WorkerProc._generate_async_output_id()
+                gpu_event = current_omni_platform.record_gpu_event()
+                self._async_output_queue.put((output, async_output_id, gpu_event))
                 msg = AsyncDiffusionOutput(
-                    kind=AsyncDiffusionOutput.COMPUTE_DONE,
+                    kind=AsyncOutputKind.COMPUTE_DONE,
                     rpc_id=rpc_id,
-                    output_token=output_token,
+                    async_output_id=async_output_id,
                 )
                 self.result_mq.enqueue(msg)
                 return
@@ -875,7 +865,7 @@ class WorkerProc:
         """
         d2h_stream = torch.cuda.Stream()
         while self._running:
-            output, output_token, gpu_event = self._async_output_queue.get()
+            output, async_output_id, gpu_event = self._async_output_queue.get()
             try:
                 # Cross-stream ordering: wait for default stream to finish
                 # writing the output tensors before the side stream reads.
@@ -886,20 +876,20 @@ class WorkerProc:
 
                 self.result_mq.enqueue(
                     AsyncDiffusionOutput(
-                        kind=AsyncDiffusionOutput.OUTPUT_READY,
-                        output_token=output_token,
+                        kind=AsyncOutputKind.OUTPUT_READY,
+                        async_output_id=async_output_id,
                         output=output,
                     )
                 )
             except Exception:
                 logger.exception(
                     "Async output packing failed for token '%s'; sending error",
-                    output_token,
+                    async_output_id,
                 )
                 self.result_mq.enqueue(
                     AsyncDiffusionOutput(
-                        kind=AsyncDiffusionOutput.OUTPUT_READY,
-                        output_token=output_token,
+                        kind=AsyncOutputKind.OUTPUT_READY,
+                        async_output_id=async_output_id,
                         error="Background D2H/SHM packing failed",
                     )
                 )
