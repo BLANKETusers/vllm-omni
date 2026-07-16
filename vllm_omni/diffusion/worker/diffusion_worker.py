@@ -835,19 +835,16 @@ class WorkerProc:
 
         # Async path: enqueue compute_done immediately, bg thread does D2H+SHM.
         if self.od_config.enable_async_diffusion_output and isinstance(output, DiffusionOutput):
-            try:
-                async_output_id = WorkerProc._generate_async_output_id()
-                gpu_event = current_omni_platform.record_gpu_event()
-                self._async_output_queue.put((output, async_output_id, gpu_event))
-                msg = AsyncDiffusionOutput(
-                    kind=AsyncOutputKind.COMPUTE_DONE,
-                    rpc_id=rpc_id,
-                    async_output_id=async_output_id,
-                )
-                self.result_mq.enqueue(msg)
-                return
-            except Exception as e:
-                logger.warning("Async output submission failed, falling back to sync: %s", e)
+            async_output_id = WorkerProc._generate_async_output_id()
+            gpu_event = current_omni_platform.record_gpu_event()
+            self._async_output_queue.put((output, async_output_id, gpu_event))
+            msg = AsyncDiffusionOutput(
+                kind=AsyncOutputKind.COMPUTE_DONE,
+                rpc_id=rpc_id,
+                async_output_id=async_output_id,
+            )
+            self.result_mq.enqueue(msg)
+            return
 
         # Sync path (original, or async fallback).
         try:
