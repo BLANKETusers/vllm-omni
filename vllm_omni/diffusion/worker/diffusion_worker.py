@@ -289,6 +289,10 @@ class DiffusionWorker:
         # Also need to log, because vLLM internally logs another line in VllmConfig.__post_init__. Avoid confusion.
         vllm_config.kernel_config.ir_op_priority = _resolve_ir_op_priority(self.od_config, vllm_config)
         if self.od_config.moe_backend != "auto":
+            logger.warning(
+                "Overriding MoE backend from default 'auto' to '%s' per deploy config.",
+                self.od_config.moe_backend,
+            )
             vllm_config.kernel_config.moe_backend = self.od_config.moe_backend
         logger.info(
             "Final IR op priority after setting vLLM-Omni overrides: %s", vllm_config.kernel_config.ir_op_priority
