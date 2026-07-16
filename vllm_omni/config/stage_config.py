@@ -75,6 +75,14 @@ def build_stage_runtime_overrides(
 
     for key, value in cli_overrides.items():
         if value is None or key in internal_keys:
+            if key in ("enable_async_diffusion_output",):
+                logger.info(
+                    "[ASYNC] build_stage_runtime_overrides: key=%s DROPPED value=%s is_None=%s in_internal=%s",
+                    key,
+                    value,
+                    value is None,
+                    key in internal_keys,
+                )
             continue
 
         match = _STAGE_OVERRIDE_PATTERN.match(key)
@@ -87,6 +95,12 @@ def build_stage_runtime_overrides(
 
         result[key] = value
 
+    logger.info(
+        "[ASYNC] build_stage_runtime_overrides: stage_id=%s enable_async_diffusion_output=%s result_keys=%s",
+        stage_id,
+        result.get("enable_async_diffusion_output"),
+        sorted(k for k in result if "async" in k),
+    )
     return result
 
 
@@ -955,6 +969,12 @@ class StageConfig:
         for key, value in runtime_overrides.items():
             if value is not None and key not in ("devices", "max_batch_size", "num_replicas"):
                 engine_args[key] = value
+
+        logger.info(
+            "[ASYNC] to_omegaconf: stage_id=%s enable_async_diffusion_output=%s",
+            self.stage_id,
+            engine_args.get("enable_async_diffusion_output"),
+        )
 
         # Build runtime config from YAML defaults + CLI overrides
         runtime: dict[str, Any] = dict(self.yaml_runtime)

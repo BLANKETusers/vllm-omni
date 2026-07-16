@@ -346,6 +346,10 @@ def load_stage_configs_from_model(
         base_engine_args = {}
 
     cli_overrides = _convert_dataclasses_to_dict(dict(base_engine_args))
+    logger.info(
+        "[ASYNC] load_stage_configs_from_model: enable_async_diffusion_output=%s (in cli_overrides)",
+        cli_overrides.get("enable_async_diffusion_output"),
+    )
     if stage_overrides:
         for stage_id_str, overrides in stage_overrides.items():
             for key, val in overrides.items():
