@@ -844,9 +844,16 @@ class WorkerProc:
                 async_output_id=async_output_id,
             )
             self.result_mq.enqueue(msg)
+            logger.info("[ASYNC] return_result: async path taken, async_output_id=%s", async_output_id)
             return
 
         # Sync path (original, or async fallback).
+        logger.info(
+            "[ASYNC] return_result: sync path, async=%s, isinstance_Diff=%s, output_type=%s",
+            self.od_config.enable_async_diffusion_output,
+            isinstance(output, DiffusionOutput),
+            type(output).__name__,
+        )
         try:
             pack_diffusion_output_shm(output)
         except Exception as e:
@@ -861,6 +868,11 @@ class WorkerProc:
         default stream where the next forward runs.
         """
         d2h_stream = torch.cuda.Stream()
+        logger.info(
+            "[ASYNC] _async_output_loop started, d2h_stream=%s, default_stream=%s",
+            d2h_stream.cuda_stream,
+            torch.cuda.default_stream().cuda_stream,
+        )
         while self._running:
             output, async_output_id, gpu_event = self._async_output_queue.get()
             try:
