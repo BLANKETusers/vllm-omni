@@ -372,10 +372,6 @@ class StageConfigFactory:
         applied = cls._apply_strategy_specs(stages, strategy_specs)
 
         explicit_overrides = {k: v for k, v in cli_overrides.items() if v is not None}
-        logger.info(
-            "[ASYNC] _create_from_registry: enable_async_diffusion_output=%s (in explicit_overrides)",
-            explicit_overrides.get("enable_async_diffusion_output"),
-        )
 
         for stage in stages:
             stage.runtime_overrides = cls._merge_cli_overrides(stage, explicit_overrides)

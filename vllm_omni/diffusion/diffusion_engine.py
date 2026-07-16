@@ -172,11 +172,6 @@ class DiffusionEngine:
             self.od_config.step_execution = True
             self.step_execution = True
 
-        logger.info(
-            "[ASYNC] DiffusionEngine: od_config.enable_async_diffusion_output=%s st=%s",
-            od_config.enable_async_diffusion_output,
-            od_config.step_execution,
-        )
         executor_class = DiffusionExecutor.get_class(od_config)
         self.executor = executor_class(od_config)
         self.scheduler: SchedulerInterface = scheduler or (

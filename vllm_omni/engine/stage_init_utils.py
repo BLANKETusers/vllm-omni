@@ -1074,13 +1074,7 @@ def build_diffusion_config(
     """Build diffusion config for a stage."""
 
     engine_args_dict = build_engine_args_dict(stage_cfg, model)
-    logger.info(
-        "[ASYNC] build_diffusion_config: enable_async_diffusion_output=%s, engine_args_keys=%s",
-        engine_args_dict.get("enable_async_diffusion_output"),
-        sorted(k for k in engine_args_dict if "async" in k or "stream" in k),
-    )
     od_config = OmniDiffusionConfig.from_kwargs(**engine_args_dict)
-    logger.info("[ASYNC] od_config.enable_async_diffusion_output=%s", od_config.enable_async_diffusion_output)
 
     num_devices_per_stage = od_config.parallel_config.world_size
     device_control_env = current_omni_platform.device_control_env_var

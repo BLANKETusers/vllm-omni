@@ -471,7 +471,6 @@ class _DiffusionConfigProjection:
     diffusion_kv_cache_skip_layer_indices: set[int] | None = None
     force_cutlass_fp8: bool = False
     enable_diffusion_pipeline_profiler: bool = False
-    enable_async_diffusion_output: bool = False
     step_execution: bool = False
     supports_multimodal_inputs: bool = False
     max_multimodal_image_inputs: int | None = None

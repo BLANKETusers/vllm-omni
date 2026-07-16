@@ -1067,10 +1067,6 @@ class AsyncOmniEngine:
                 else {}
             ),
         }
-        logger.info(
-            "[ASYNC] _create_default_diffusion_stage_cfg: enable_async_diffusion_output=%s (from kwargs)",
-            stage_engine_args.get("enable_async_diffusion_output"),
-        )
         # Only set dtype if it was already explicitly passed and normalized
         if "dtype" in normalized_kwargs:
             stage_engine_args["dtype"] = normalized_kwargs["dtype"]
