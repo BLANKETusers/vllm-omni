@@ -46,6 +46,7 @@ _DEPLOY_CONFIG = {
             "gpu_memory_utilization": 0.9,
             "enforce_eager": True,
             "trust_remote_code": True,
+            "moe_backend": "flashinfer_cutlass",
             "devices": "0,1,2,3",  # set dynamically by _write_deploy_config
             "vae_use_slicing": False,
             "vae_use_tiling": False,
@@ -97,6 +98,8 @@ def _run_vllm_omni_hunyuan_image3_online(*, model: str, deploy_config: str, outp
         "900",
         "--enforce-eager",
         "--trust-remote-code",
+        "--moe-backend",
+        "flashinfer_cutlass",
     ]
     with OmniServer(model, server_args, use_omni=True) as omni_server:
         response = requests.post(
@@ -161,6 +164,7 @@ def _run_vllm_omni_hunyuan_image3_offline(*, model: str, deploy_config: str, out
             "--enforce-eager",
         ],
         check=True,
+        env={**os.environ, "HUNYUAN_IMAGE3_MOE_BACKEND": "flashinfer_cutlass"},
     )
     images = sorted(Path(output_dir).glob("output_*.png"))
     assert images, f"No output image found in {output_dir}"

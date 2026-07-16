@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import logging
+import os
 from typing import Any
 
 import torch
@@ -9,6 +11,8 @@ import vllm.forward_context as _vllm_fc
 from vllm.utils.import_utils import resolve_obj_by_qualname
 
 from vllm_omni.platforms import current_omni_platform
+
+logger = logging.getLogger(__name__)
 
 
 def _set_forward_context_num_tokens(num_tokens: int) -> None:
@@ -75,6 +79,21 @@ class HunyuanFusedMoEDefault:
         kwargs.pop("reduce_results", None)
         # FusedMoE is now a factory function — call it to get a MoERunner.
         from vllm.model_executor.layers.fused_moe import FusedMoE as _FusedMoE
+
+        # Allow overriding MoE backend via env var for numerical alignment
+        # with the official HunyuanImage-3.0 repo. Only active when explicitly
+        # set; otherwise fall through to the normal config/oracle path.
+        moe_backend = os.environ.get("HUNYUAN_IMAGE3_MOE_BACKEND")
+        if moe_backend:
+            from vllm.config import get_current_vllm_config
+
+            vllm_config = get_current_vllm_config()
+            logger.warning(
+                "HunyuanFusedMoEDefault: overriding moe_backend %s -> %s",
+                vllm_config.kernel_config.moe_backend,
+                moe_backend,
+            )
+            vllm_config.kernel_config.moe_backend = moe_backend
 
         moe_runner = _FusedMoE(prefix=prefix, **kwargs)
 
