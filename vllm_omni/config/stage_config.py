@@ -407,6 +407,7 @@ class StageDeployConfig:
 
     # Diffusion-specific debug and observability knobs.
     enable_diffusion_pipeline_profiler: bool | None = None
+    enable_async_diffusion_output: bool | None = None
 
     # Modality/service constraints consumed outside the core engine config.
     max_generated_image_size: int | None = None
@@ -478,13 +479,7 @@ def deploy_runtime_override_keys() -> frozenset[str]:
     They must remain overridable even if they are also modeled on
     ``OrchestratorArgs`` for top-level CLI parsing.
     """
-    return (
-        frozenset(_STAGE_DEPLOY_FIELDS)
-        | frozenset(_PIPELINE_WIDE_ENGINE_FIELDS)
-        | {
-            "enable_async_diffusion_output",
-        }
-    )
+    return frozenset(_STAGE_DEPLOY_FIELDS) | frozenset(_PIPELINE_WIDE_ENGINE_FIELDS)
 
 
 def _parse_stage_deploy(stage_data: dict[str, Any]) -> StageDeployConfig:
