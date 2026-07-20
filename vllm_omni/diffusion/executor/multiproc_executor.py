@@ -109,6 +109,12 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         # When pump is active it is the sole reader of result_mq; non-async
         # messages are placed here for collective_rpc() to consume.
         self._sync_result_buffer: queue.Queue = queue.Queue()
+        logger.info(
+            "[DEBUG] step_execution=%s, streaming_output=%s, od_config type=%s",
+            self.od_config.step_execution,
+            getattr(self.od_config, "streaming_output", None),
+            type(self.od_config).__name__,
+        )
         if not self.od_config.step_execution:
             self._start_result_pump()
 

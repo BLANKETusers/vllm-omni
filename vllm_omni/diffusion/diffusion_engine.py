@@ -162,10 +162,16 @@ class DiffusionEngine:
         self._post_process_accepts_sampling_params = _func_accepts_parameter(self.post_process_func, "sampling_params")
 
         self.step_execution = bool(getattr(od_config, "step_execution", False))
+        logger.info(
+            "[DEBUG] DiffusionEngine.__init__: step_execution=%s, streaming_output=%s",
+            self.step_execution,
+            getattr(od_config, "streaming_output", None),
+        )
         if self.od_config.streaming_output and not self.step_execution:
             logger.warning("streaming_output=True requires step_execution=True; enabling step execution.")
             self.od_config.step_execution = True
             self.step_execution = True
+            logger.info("[DEBUG] DiffusionEngine.__init__: step_execution CHANGED to True due to streaming_output")
 
         executor_class = DiffusionExecutor.get_class(od_config)
         self.executor = executor_class(od_config)

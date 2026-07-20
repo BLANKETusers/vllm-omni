@@ -1189,6 +1189,11 @@ class OmniDiffusionConfig:
         filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_fields}
 
         instance = cls(**filtered_kwargs)
+        logger.info(
+            "[DEBUG] OmniDiffusionConfig.from_kwargs: step_execution=%s, streaming_output=%s",
+            getattr(instance, "step_execution", "MISSING"),
+            getattr(instance, "streaming_output", "MISSING"),
+        )
         return instance
 
 

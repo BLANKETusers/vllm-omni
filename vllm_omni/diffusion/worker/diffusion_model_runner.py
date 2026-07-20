@@ -213,9 +213,15 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
         )
         logger.info("Model runner: Model loaded successfully.")
 
+        logger.info(
+            "[DEBUG] DiffusionModelRunner.__init__: step_execution=%s, streaming_output=%s",
+            getattr(self.od_config, "step_execution", "MISSING"),
+            getattr(self.od_config, "streaming_output", "MISSING"),
+        )
         if self.od_config.streaming_output and not getattr(self.od_config, "step_execution", False):
             logger.warning("streaming_output=True requires step_execution=True; enabling step execution.")
             self.od_config.step_execution = True
+            logger.info("[DEBUG] DiffusionModelRunner.__init__: step_execution CHANGED to True due to streaming_output")
 
         if getattr(self.od_config, "step_execution", False) and not self.supports_step_mode():
             raise ValueError(

@@ -1074,7 +1074,17 @@ def build_diffusion_config(
     """Build diffusion config for a stage."""
 
     engine_args_dict = build_engine_args_dict(stage_cfg, model)
+    logger.info(
+        "[DEBUG] build_diffusion_config: step_execution in engine_args_dict=%s, streaming_output=%s",
+        engine_args_dict.get("step_execution", "NOT_IN_DICT"),
+        engine_args_dict.get("streaming_output", "NOT_IN_DICT"),
+    )
     od_config = OmniDiffusionConfig.from_kwargs(**engine_args_dict)
+    logger.info(
+        "[DEBUG] build_diffusion_config: od_config.step_execution=%s, od_config.streaming_output=%s",
+        getattr(od_config, "step_execution", "MISSING"),
+        getattr(od_config, "streaming_output", "MISSING"),
+    )
 
     num_devices_per_stage = od_config.parallel_config.world_size
     device_control_env = current_omni_platform.device_control_env_var
