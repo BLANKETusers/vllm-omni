@@ -162,11 +162,6 @@ class DiffusionEngine:
         self._post_process_accepts_sampling_params = _func_accepts_parameter(self.post_process_func, "sampling_params")
 
         self.step_execution = bool(getattr(od_config, "step_execution", False))
-        if self.step_execution and getattr(od_config, "enable_async_diffusion_output", False):
-            raise ValueError(
-                "enable_async_diffusion_output and step_execution cannot be enabled "
-                "simultaneously — async output only supports request-mode execute_model."
-            )
         if self.od_config.streaming_output and not self.step_execution:
             logger.warning("streaming_output=True requires step_execution=True; enabling step execution.")
             self.od_config.step_execution = True

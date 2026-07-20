@@ -488,7 +488,6 @@ class OrchestratorArgs:
     max_generated_image_size: int | None = None
     tts_max_instructions_length: int | None = None
     enable_diffusion_pipeline_profiler: bool = False
-    enable_async_diffusion_output: bool = False
     enable_ar_profiler: bool = False
     auxiliary_text_encoder: str | None = None
     log_file: str | None = None

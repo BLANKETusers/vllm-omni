@@ -97,7 +97,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         self._finalizer = weakref.finalize(self, self.resources)
 
         # Async output: result pump thread for dispatching AsyncDiffusionOutput
-        # messages when enable_async_diffusion_output is True.
+        # messages in request-mode (step_execution=False).
         self._rpc_id_counter = 0
         self._rpc_id_lock = threading.Lock()
         self._rpc_futures: dict[str, concurrent.futures.Future[AsyncDiffusionOutput]] = {}
@@ -109,7 +109,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         # When pump is active it is the sole reader of result_mq; non-async
         # messages are placed here for collective_rpc() to consume.
         self._sync_result_buffer: queue.Queue = queue.Queue()
-        if self.od_config.enable_async_diffusion_output:
+        if not self.od_config.step_execution:
             self._start_result_pump()
 
         self.start_worker_monitor()
@@ -148,7 +148,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                 if remaining <= 0:
                     raise TimeoutError(f"RPC call to {method} timed out.")
                 chunk_timeout = min(_DEQUEUE_TIMEOUT_S, remaining)
-            if self.od_config.enable_async_diffusion_output:
+            if not self.od_config.step_execution:
                 try:
                     return self._sync_result_buffer.get(timeout=chunk_timeout)
                 except queue.Empty:
@@ -465,7 +465,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         # so the D2H copy runs on a side stream in the worker background
         # thread while the default stream is free for the next forward.
         # pump routes the result back to a Future via rpc_id.
-        if self.od_config.enable_async_diffusion_output and method in ("execute_model", "execute_model_batch"):
+        if not self.od_config.step_execution and method in ("execute_model", "execute_model_batch"):
             rpc_id = self._next_rpc_id()
             rpc_request["rpc_id"] = rpc_id
             fut: concurrent.futures.Future = concurrent.futures.Future()
@@ -479,22 +479,9 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                     self._rpc_futures.pop(rpc_id, None)
                 raise TimeoutError(f"RPC call to {method} timed out.")
 
-        # ── Path 2: async-enabled, but not execute_model ──
-        # Pump is the sole reader of result_mq.  Non-AsyncDiffusionOutput
-        # messages are placed in _sync_result_buffer for us to consume here.
-        if self.od_config.enable_async_diffusion_output:
-            self._broadcast_mq.enqueue(rpc_request)
-            response = self._dequeue_one_with_failure_polling(deadline, method)
-
-            try:
-                unpack_diffusion_output_shm(response)
-            except Exception as e:
-                logger.warning("SHM unpack failed (data may already be inline): %s", e)
-
-            response = MultiprocDiffusionExecutor._handle_rpc_response(response)
-            return response
-
-        # ── Path 3: async not enabled (original sync path) ──
+        # ── Fallback: step-execution or other non-execute_model RPCs ──
+        # _dequeue_one_with_failure_polling reads from _sync_result_buffer
+        # when pump is active (request-mode), or result_mq directly otherwise.
         try:
             self._broadcast_mq.enqueue(rpc_request)
 
