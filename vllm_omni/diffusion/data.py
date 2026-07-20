@@ -782,11 +782,6 @@ class OmniDiffusionConfig:
     # Streaming mode settings
     streaming_output: bool = False  # Start (video) generation with initial prompt, but streaming output in chunks
 
-    # Async diffusion output: offload GPU→CPU copies to a Worker background
-    # thread and signal readiness via a dedicated message channel instead of
-    # polling SHM flags.  Enabled per-model via CLI, YAML, or env var.
-    enable_async_diffusion_output: bool = False
-
     # Maximum number of sequences to generate in a batch
     max_num_seqs: int = 1
 
@@ -1288,7 +1283,7 @@ class AsyncOutputKind(Enum):
 class AsyncDiffusionOutput:
     """Async protocol envelope for ``result_mq`` messages.
 
-    When ``enable_async_diffusion_output`` is True, all ``result_mq``
+    In request-mode (``step_execution=False``), all ``result_mq``
     messages use this envelope.  The ``kind`` field routes the message
     to the correct consumer.
     """
