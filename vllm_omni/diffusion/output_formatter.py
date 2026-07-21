@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TypeGuard
 
+from vllm.logger import init_logger
+
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.io_support import supports_audio_output
 from vllm_omni.diffusion.registry import DiffusionModelRegistry
@@ -25,6 +27,8 @@ from vllm_omni.outputs.output_metadata import (
     validate_diffusion_metadata,
     validate_public_diffusion_metadata,
 )
+
+logger = init_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -153,6 +157,12 @@ def format_diffusion_outputs(
     # SenseNova-U1 / BAGEL single-stage img2text / text2text), wrap it
     # as a text-type response instead of an image.
     is_text_output = postprocess_output.primary_key == "text" or "text" in postprocess_output.metadata
+    logger.info(
+        "[DEBUG-ASYNC] format_diffusion_outputs: primary_key=%s metadata_keys=%s is_text_output=%s",
+        postprocess_output.primary_key,
+        list(postprocess_output.metadata.keys()) if postprocess_output.metadata else [],
+        is_text_output,
+    )
 
     is_audio_output = supports_audio_output(od_config.model_class_name)
     audio_sample_rate = _metadata_audio_sample_rate(postprocess_output.metadata)
