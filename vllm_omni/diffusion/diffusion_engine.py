@@ -151,6 +151,7 @@ class DiffusionEngine:
         Args:
             config: The configuration for the diffusion engine.
         """
+        logger.info("[DIAG-START] DiffusionEngine.__init__: starting")
         self.od_config = od_config
 
         self.post_process_func = get_diffusion_post_process_func(od_config)
@@ -166,7 +167,9 @@ class DiffusionEngine:
             self.step_execution = True
 
         executor_class = DiffusionExecutor.get_class(od_config)
+        logger.info("[DIAG-START] DiffusionEngine.__init__: about to create executor (%s)", executor_class.__name__)
         self.executor = executor_class(od_config)
+        logger.info("[DIAG-START] DiffusionEngine.__init__: executor created, about to init scheduler")
         self.scheduler: SchedulerInterface = scheduler or (
             StepScheduler() if self.step_execution else RequestScheduler()
         )
@@ -204,7 +207,9 @@ class DiffusionEngine:
             )
 
         try:
+            logger.info("[DIAG-START] DiffusionEngine.__init__: about to call _dummy_run()")
             self._dummy_run()
+            logger.info("[DIAG-START] DiffusionEngine.__init__: _dummy_run() completed successfully")
         except Exception as e:
             logger.error(f"Dummy run failed: {e}")
             self.close()
@@ -763,6 +768,7 @@ class DiffusionEngine:
 
     def _dummy_run(self):
         """A dummy run to warm up the model."""
+        logger.info("[DIAG-START] _dummy_run: starting warmup")
         num_inference_steps = 1
         height = 512
         width = 512
@@ -782,7 +788,7 @@ class DiffusionEngine:
 
         num_frames = get_dummy_run_num_frames(self.od_config.model_class_name, supports_audio_input)
         if num_frames <= 0:
-            logger.info("Skipping dummy warmup run (num_frames=0)")
+            logger.info("[DIAG-START] _dummy_run: Skipping warmup (num_frames=0)")
             return
         req = OmniDiffusionRequest(
             prompt=prompt,
@@ -802,9 +808,11 @@ class DiffusionEngine:
                 extra_args={"cfg_text_scale": 1.0, "cfg_img_scale": 1.0},
             ),
         )
-        logger.info("dummy run to warm up the model")
+        logger.info("[DIAG-START] _dummy_run: request built, about to run pre_process")
         request = self.pre_process_func(req) if self.pre_process_func is not None else req
+        logger.info("[DIAG-START] _dummy_run: pre_process done, about to run add_req_and_wait_for_response")
         output = self.add_req_and_wait_for_response(request)
+        logger.info("[DIAG-START] _dummy_run: add_req_and_wait_for_response done")
         if output.error:
             raise RuntimeError(f"Dummy run failed: {output.error}")
 

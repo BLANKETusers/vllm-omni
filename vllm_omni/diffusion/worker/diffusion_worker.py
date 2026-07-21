@@ -212,7 +212,9 @@ class DiffusionWorker:
         # requests, which only carry their request_id in subsequent ticks.
         self._step_lora_state: dict[str, tuple[LoRARequest | None, float]] = {}
         self.stage_id = getattr(od_config, "stage_id", 0)
+        logger.info("[DIAG-START] Worker %d: __init__ started, about to call init_device()", self.rank)
         self.init_device()
+        logger.info("[DIAG-START] Worker %d: init_device() completed, about to create model runner", self.rank)
         # Create model runner — one decision chain, in precedence order:
         #   1. explicit od_config.diffusion_model_runner_cls (user override),
         #   2. the runner declared by the engine class that engine_backend
@@ -247,7 +249,9 @@ class DiffusionWorker:
         )
         self.profiler: WorkerProfiler | None = self._create_profiler()
         if not skip_load_model:
+            logger.info("[DIAG-START] Worker %d: about to call load_model()", self.rank)
             self.load_model(load_format=self.od_config.diffusion_load_format)
+            logger.info("[DIAG-START] Worker %d: load_model() completed", self.rank)
             self.init_lora_manager()
         logger.info(f"Worker {self.rank}: Initialization complete.")
 
@@ -264,8 +268,10 @@ class DiffusionWorker:
         os.environ["WORLD_SIZE"] = str(world_size)
 
         # Setup device
+        logger.info("[DIAG-START] Worker %d: init_device() setting up device...", rank)
         self.device = current_omni_platform.get_torch_device(rank)
         current_omni_platform.set_device(self.device)
+        logger.info("[DIAG-START] Worker %d: device set to %s", rank, self.device)
 
         # Create vllm_config for parallel configuration. Pass explicit device_config
         # so DeviceConfig does not rely on current_platform in worker subprocesses.
@@ -305,10 +311,12 @@ class DiffusionWorker:
             set_forward_context(vllm_config=self.vllm_config, omni_diffusion_config=self.od_config),
             set_current_vllm_config(self.vllm_config),
         ):
+            logger.info("[DIAG-START] Worker %d: calling init_distributed_environment()...", rank)
             init_distributed_environment(world_size=world_size, rank=rank)
-            logger.info(f"Worker {self.rank}: Initialized device and distributed environment.")
+            logger.info("[DIAG-START] Worker %d: init_distributed_environment() completed.", rank)
 
             parallel_config = self.od_config.parallel_config
+            logger.info("[DIAG-START] Worker %d: calling initialize_model_parallel()...", rank)
             initialize_model_parallel(
                 data_parallel_size=parallel_config.data_parallel_size,
                 cfg_parallel_size=parallel_config.cfg_parallel_size,
@@ -321,6 +329,7 @@ class DiffusionWorker:
                 hsdp_replicate_size=parallel_config.hsdp_replicate_size if parallel_config.use_hsdp else 1,
                 enable_expert_parallel=parallel_config.enable_expert_parallel,
             )
+            logger.info("[DIAG-START] Worker %d: initialize_model_parallel() completed.", rank)
             init_workspace_manager(self.device)
 
     def _create_profiler(self) -> WorkerProfiler | None:
@@ -761,6 +770,7 @@ class WorkerProc:
         worker_extension_cls: str | None = None,
         custom_pipeline_args: dict[str, Any] | None = None,
     ):
+        logger.info("[DIAG-START] WorkerProc.__init__: rank=%d starting", gpu_id)
         self.od_config = od_config
         self.gpu_id = gpu_id
         self.wake_event = wake_event
@@ -769,6 +779,7 @@ class WorkerProc:
         self.context = zmq.Context(io_threads=2)
 
         # Initialize MessageQueue reader from handle
+        logger.info("[DIAG-START] WorkerProc.__init__: rank=%d creating MessageQueue from handle", gpu_id)
         self.mq = MessageQueue.create_from_handle(broadcast_handle, gpu_id)
 
         self.result_mq = None
@@ -789,7 +800,9 @@ class WorkerProc:
         assert od_config.master_port is not None
 
         # Create worker using WorkerWrapperBase for extension support
+        logger.info("[DIAG-START] WorkerProc.__init__: rank=%d about to create DiffusionWorker", gpu_id)
         self.worker = self._create_worker(gpu_id, od_config, worker_extension_cls, custom_pipeline_args)
+        logger.info("[DIAG-START] WorkerProc.__init__: rank=%d DiffusionWorker created", gpu_id)
         self._running = True
 
     def _create_worker(
@@ -983,6 +996,7 @@ class WorkerProc:
         """Worker initialization and execution loops."""
         from vllm_omni.plugins import load_omni_general_plugins
 
+        logger.info("[DIAG-START] Worker %d: worker_main() entered", rank)
         shutdown_triggered = False
 
         def signal_handler(signum: int, frame) -> None:
@@ -1005,6 +1019,7 @@ class WorkerProc:
             pass  # setproctitle not installed, skip process title setting
 
         load_omni_general_plugins()
+        logger.info("[DIAG-START] Worker %d: plugins loaded, about to create WorkerProc", rank)
         worker_proc = None
         try:
             worker_proc = WorkerProc(
@@ -1015,6 +1030,7 @@ class WorkerProc:
                 worker_extension_cls=worker_extension_cls,
                 custom_pipeline_args=custom_pipeline_args,
             )
+            logger.info("[DIAG-START] Worker %d: WorkerProc created, about to send ready signal", rank)
             logger.info(f"Worker {rank}: Scheduler loop started.")
             pipe_writer.send(
                 {

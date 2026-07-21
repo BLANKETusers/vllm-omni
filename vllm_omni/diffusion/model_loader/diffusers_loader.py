@@ -372,7 +372,11 @@ class DiffusersPipelineLoader:
                     target_device=device, load_format=load_format, custom_pipeline_name=custom_pipeline_name
                 )
             else:
+                logger.info("[DIAG-START] DiffusersPipelineLoader: about to _init_from_load_format()")
                 model = self._init_from_load_format(load_format, target_device, custom_pipeline_name, is_hsdp=False)
+                logger.info(
+                    "[DIAG-START] DiffusersPipelineLoader: _init_from_load_format() completed, about to load weights"
+                )
                 logger.debug("Loading weights on %s ...", load_device)
                 if load_format == "diffusers":
                     # DiffusersAdapterPipeline.load_weights() calls
@@ -381,9 +385,13 @@ class DiffusersPipelineLoader:
                     cast(DiffusersAdapterPipeline, model).load_weights()
                 else:
                     self.load_weights(model)
+                logger.info(
+                    "[DIAG-START] DiffusersPipelineLoader: weights loaded, about to _process_weights_after_loading()"
+                )
                 # HSDP processes quantized weights before wrapping parameters as
                 # DTensors. The non-HSDP path can process them here as usual.
                 self._process_weights_after_loading(model, target_device)
+                logger.info("[DIAG-START] DiffusersPipelineLoader: _process_weights_after_loading() completed")
 
             if offload_after_quant:
                 model.to("cpu")

@@ -185,7 +185,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
 
     def _launch_workers(self, broadcast_handle, wake_events):
         od_config = self.od_config
-        logger.info("Starting server...")
+        logger.info("[DIAG-START] _launch_workers: Starting server...")
 
         num_gpus = od_config.num_gpus
         mp.set_start_method("spawn", force=True)
@@ -218,6 +218,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             )
             scheduler_pipe_readers.append(reader)
             process.start()
+            logger.info("[DIAG-START] _launch_workers: Worker-%d process spawned (pid=%d)", i, process.pid)
             processes.append(process)
 
         # Wait for all workers to be ready
@@ -227,6 +228,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             writer.close()
 
         for i, reader in enumerate(scheduler_pipe_readers):
+            logger.info("[DIAG-START] _launch_workers: Waiting for Worker-%d ready signal...", i)
             try:
                 data = reader.recv()
             except EOFError:
@@ -238,13 +240,15 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             if data["status"] != "ready":
                 raise RuntimeError("Initialization failed. Please see the error messages above.")
 
+            logger.info("[DIAG-START] _launch_workers: Worker-%d sent ready signal.", i)
+
             if i == 0:
                 result_handle = data.get("result_handle")
 
             scheduler_infos.append(data)
             reader.close()
 
-        logger.debug("All workers are ready")
+        logger.info("[DIAG-START] _launch_workers: All workers are ready")
 
         return processes, result_handle
 

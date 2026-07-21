@@ -59,7 +59,9 @@ class InlineStageDiffusionClient(StageClientBase):
         self.batch_size = batch_size
 
         self._enrich_config()
+        logger.info("[DIAG-START] InlineStageDiffusionClient: about to create DiffusionEngine")
         self._engine = DiffusionEngine.make_engine(self.od_config)
+        logger.info("[DIAG-START] InlineStageDiffusionClient: DiffusionEngine created successfully")
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="inline-diffusion")
 
         self._output_queue: asyncio.Queue[OmniRequestOutput] = asyncio.Queue()

@@ -201,6 +201,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
         load_config = LoadConfig()
         model_loader = DiffusersPipelineLoader(load_config, od_config=self.od_config)
         time_before_load = time.perf_counter()
+        logger.info("[DIAG-START] DiffusionModelRunner: about to call model_loader.load_model()")
 
         with get_memory_context():
             with DeviceMemoryProfiler() as m:
@@ -213,7 +214,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
         time_after_load = time.perf_counter()
 
         logger.info(
-            "Model loading took %.4f GiB and %.6f seconds",
+            "[DIAG-START] DiffusionModelRunner: model_loader.load_model() completed, took %.4f GiB and %.6f seconds",
             m.consumed_memory / GiB_bytes,
             time_after_load - time_before_load,
         )
