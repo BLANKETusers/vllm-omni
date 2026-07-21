@@ -555,13 +555,6 @@ _DIFFUSION_POST_PROCESS_FUNCS = {
     "Krea2Pipeline": "get_krea2_post_process_func",
 }
 
-_DIFFUSION_ACTION_POST_PROCESS_FUNCS = {
-    # arch: action_post_process_func
-    # `action_post_process_func` function must be placed in {mod_folder}/{mod_relname}.py,
-    # where mod_folder and mod_relname are defined and mapped using `_DIFFUSION_MODELS` via the `arch` key.
-    "Cosmos3OmniDiffusersPipeline": "get_cosmos3_action_post_process_func",
-}
-
 _DIFFUSION_IR_OP_PRIORITY_FUNCS = {
     # arch: ir_op_priority_func
     # `ir_op_priority_func` function must be placed in {mod_folder}/{mod_relname}.py,
