@@ -23,7 +23,7 @@ DIFFUSION_RPC_RESULT_ENVELOPE = "diffusion_rpc_result"
 
 def _tensor_to_shm(
     tensor: torch.Tensor,
-    d2h_stream: torch.cuda.Stream | None = None,
+    d2h_stream: torch.Stream | None = None,
 ) -> dict[str, Any]:
     """Copy a tensor into POSIX shared memory and return a metadata handle.
 
@@ -42,12 +42,16 @@ def _tensor_to_shm(
     original_dtype = tensor.dtype
     if d2h_stream is not None:
         # Convert bf16 on GPU (on the side stream), then D2H to pinned CPU.
-        with torch.cuda.stream(d2h_stream):
+        old_stream = torch.accelerator.current_stream()
+        torch.accelerator.set_stream(d2h_stream)
+        try:
             t = tensor.detach()
             if original_dtype == torch.bfloat16:
                 t = t.to(torch.float32)
             cpu = torch.empty(t.shape, dtype=t.dtype, pin_memory=True)
             cpu.copy_(t, non_blocking=True)
+        finally:
+            torch.accelerator.set_stream(old_stream)
         tensor = cpu
     else:
         tensor = tensor.detach().cpu().contiguous()
@@ -96,7 +100,7 @@ def _tensor_from_shm(handle: dict[str, Any]) -> torch.Tensor:
 
 def _pack_tensor_if_large(
     val: torch.Tensor,
-    d2h_stream: torch.cuda.Stream | None = None,
+    d2h_stream: torch.Stream | None = None,
 ) -> torch.Tensor | dict:
     """Replace a tensor with an SHM handle if it exceeds the threshold."""
     if val.nelement() * val.element_size() > _SHM_TENSOR_THRESHOLD:
@@ -106,7 +110,7 @@ def _pack_tensor_if_large(
 
 def _pack_value_if_large(
     val: object,
-    d2h_stream: torch.cuda.Stream | None = None,
+    d2h_stream: torch.Stream | None = None,
 ) -> object:
     """Recursively replace large tensors with SHM handles.
 
@@ -142,7 +146,7 @@ def _unpack_if_shm_handle(val: object) -> object:
 
 def _pack_diffusion_fields(
     output: DiffusionOutput,
-    d2h_stream: torch.cuda.Stream | None = None,
+    d2h_stream: torch.Stream | None = None,
 ) -> DiffusionOutput:
     if output.output is not None:
         output.output = _pack_value_if_large(output.output, d2h_stream=d2h_stream)
@@ -161,7 +165,7 @@ def _is_rpc_result_envelope(output: object) -> bool:
 
 def pack_diffusion_output_shm(
     output: object,
-    d2h_stream: torch.cuda.Stream | None = None,
+    d2h_stream: torch.Stream | None = None,
 ) -> object:
     """Replace large tensors in diffusion worker outputs with SHM handles.
 

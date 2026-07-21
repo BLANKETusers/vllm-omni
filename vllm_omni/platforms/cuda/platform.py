@@ -234,14 +234,14 @@ class CudaOmniPlatform(OmniPlatform, CudaPlatformBase):
         torch.accelerator.synchronize()
 
     @classmethod
-    def record_gpu_event(cls) -> torch.cuda.Event | None:
-        """Record a CUDA event on the default stream to mark tensor readiness."""
+    def record_gpu_event(cls) -> torch.Event | None:
+        """Record a device event on the default stream to mark tensor readiness."""
         try:
-            event = torch.cuda.Event()
+            event = torch.Event()
             event.record()
             return event
         except Exception:
-            logger.warning("Failed to record CUDA event for cross-stream sync")
+            logger.warning("Failed to record device event for cross-stream sync")
             return None
 
     @classmethod

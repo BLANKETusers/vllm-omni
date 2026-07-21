@@ -863,10 +863,11 @@ class WorkerProc:
     def _async_output_loop(self):
         """Background thread: D2H + SHM packing for async diffusion output.
 
-        Uses a side CUDA stream so the D2H transfer does not block the GPU
-        default stream where the next forward runs.
+        Uses a side stream so the D2H transfer does not block the default
+        stream where the next forward runs.
         """
-        d2h_stream = torch.cuda.Stream()
+        device = torch.device(torch.accelerator.current_accelerator().type, self.gpu_id)
+        d2h_stream = torch.Stream(device=device)
         while self._running:
             output, async_output_id, gpu_event = self._async_output_queue.get()
             try:

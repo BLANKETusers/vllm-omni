@@ -726,7 +726,7 @@ class OmniServeCommand(CLISubcommand):
         omni_config_group.add_argument(
             "--enable-async-diffusion-output",
             action="store_true",
-            help="Offload GPU→CPU tensor copies to a Worker background thread to overlap with the next forward.",
+            help="Offload device→CPU tensor copies to a Worker background thread to overlap with the next forward.",
         )
         omni_config_group.add_argument(
             "--enable-ar-profiler",

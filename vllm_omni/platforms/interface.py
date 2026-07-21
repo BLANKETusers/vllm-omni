@@ -161,7 +161,7 @@ class OmniPlatform(Platform):
 
     @classmethod
     def record_gpu_event(cls):
-        """Record a GPU event on the default stream to mark tensor readiness."""
+        """Record a device event on the default stream to mark tensor readiness."""
         raise NotImplementedError
 
     @classmethod
