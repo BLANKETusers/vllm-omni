@@ -365,6 +365,12 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                     exec_all_ranks=True,
                 )
                 if isinstance(result, AsyncDiffusionOutput) and result.kind == AsyncOutputKind.COMPUTE_DONE:
+                    logger.info(
+                        "[DEBUG-ASYNC] execute_request: req=%s received COMPUTE_DONE, async_output_id=%s, "
+                        "creating RunnerOutput with result=None (deferring OUTPUT_READY wait to step())",
+                        new_req.request_id,
+                        result.async_output_id,
+                    )
                     runner_outputs.append(
                         RunnerOutput(
                             request_id=new_req.request_id,
@@ -375,6 +381,10 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                         )
                     )
                 elif isinstance(result, DiffusionOutput):
+                    logger.info(
+                        "[DEBUG-ASYNC] execute_request: req=%s received DiffusionOutput directly (sync path)",
+                        new_req.request_id,
+                    )
                     runner_outputs.append(
                         RunnerOutput(
                             request_id=new_req.request_id,
@@ -552,7 +562,20 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                 with self._futures_lock:
                     fut = self._rpc_futures.pop(msg.rpc_id, None) if msg.rpc_id else None
                 if fut is not None and not fut.done():
+                    logger.info(
+                        "[DEBUG-ASYNC] _result_pump: resolving rpc_future for rpc_id=%s with %s",
+                        msg.rpc_id,
+                        msg.kind.value,
+                    )
                     fut.set_result(msg)
+                else:
+                    logger.info(
+                        "[DEBUG-ASYNC] _result_pump: %s for rpc_id=%s dropped (fut=%s, done=%s)",
+                        msg.kind.value,
+                        msg.rpc_id,
+                        "present" if fut is not None else "None",
+                        fut.done() if fut is not None else "N/A",
+                    )
             elif msg.kind == AsyncOutputKind.OUTPUT_READY:
                 with self._futures_lock:
                     fut = self._output_futures.pop(msg.async_output_id, None) if msg.async_output_id else None
@@ -566,6 +589,10 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                             logger.exception("SHM unpack failed in result pump")
                             fut.set_exception(e)
                             continue
+                        logger.info(
+                            "[DEBUG-ASYNC] _result_pump: resolving output_future for async_output_id=%s",
+                            msg.async_output_id,
+                        )
                         fut.set_result(msg.output)
                 elif msg.async_output_id:
                     if not msg.error:
@@ -573,6 +600,10 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                             unpack_diffusion_output_shm(msg.output)
                         except Exception:
                             logger.exception("SHM unpack failed in result pump (cached)")
+                    logger.info(
+                        "[DEBUG-ASYNC] _result_pump: caching OUTPUT_READY for async_output_id=%s (no waiter yet)",
+                        msg.async_output_id,
+                    )
                     with self._futures_lock:
                         self._completed_outputs[msg.async_output_id] = msg.output
 

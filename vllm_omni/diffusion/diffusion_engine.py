@@ -256,8 +256,16 @@ class DiffusionEngine:
 
         # Async mode: wait for background D2H/SHM to complete.
         if output.async_output_id:
+            logger.info(
+                "[DEBUG-ASYNC] step(): async_output_id=%s, calling wait_output_ready...",
+                output.async_output_id,
+            )
             fut = self.executor.wait_output_ready(output.async_output_id)
             output = await asyncio.wait_for(asyncio.wrap_future(fut), timeout=_ASYNC_OUTPUT_TIMEOUT)
+            logger.info(
+                "[DEBUG-ASYNC] step(): wait_output_ready returned, output.output is %s",
+                "present" if output.output is not None else "None",
+            )
 
         return self.postprocess_output(request, output, diffusion_engine_start_time, preprocess_time, exec_total_time)
 
@@ -1067,9 +1075,19 @@ class DiffusionEngine:
             )
 
         if runner_output is not None and runner_output.result is not None:
+            logger.info(
+                "[DEBUG-ASYNC] _finalize_finished_request: req=%s returning runner_output.result (sync path)",
+                request_id,
+            )
             return runner_output.result
 
         if runner_output is not None and runner_output.async_output_id is not None:
+            logger.info(
+                "[DEBUG-ASYNC] _finalize_finished_request: req=%s result=None, creating DiffusionOutput with "
+                "async_output_id=%s (async path, step() must call wait_output_ready)",
+                request_id,
+                runner_output.async_output_id,
+            )
             return DiffusionOutput(async_output_id=runner_output.async_output_id)
 
         return DiffusionOutput(error=missing_result_error)
