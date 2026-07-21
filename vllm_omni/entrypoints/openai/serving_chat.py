@@ -3085,6 +3085,12 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
             result = None
             async for output in result_generator:
                 result = output
+                logger.info(
+                    "[DEBUG-ASYNC] generate_diffusion_images: got output stage=%s output_type=%s images_count=%s",
+                    getattr(result, "stage_id", None),
+                    getattr(result, "final_output_type", None),
+                    len(getattr(getattr(result, "request_output", None), "images", [])),
+                )
             if result is None:
                 return self._create_error_response("No output generated from AsyncOmni", status_code=500)
         elif stream:
@@ -3100,6 +3106,14 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
             )
 
         images = getattr(result.request_output, "images", [])
+        logger.info(
+            "[DEBUG-ASYNC] generate_diffusion_images: final result stage=%s output_type=%s "
+            "request_output_type=%s images_count=%s",
+            getattr(result, "stage_id", None),
+            getattr(result, "final_output_type", None),
+            type(getattr(result, "request_output", None)).__name__,
+            len(images),
+        )
         stage_durations = result.stage_durations
         peak_memory_mb = result.peak_memory_mb
         cot_output = None

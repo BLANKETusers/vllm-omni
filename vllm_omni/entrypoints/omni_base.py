@@ -578,6 +578,13 @@ class OmniBase(PDDisaggregationMixin):
         self.prom_metrics.set_waiting(max(0, total - running))
 
         images = getattr(engine_outputs, "images", []) if output_type == "image" else []
+        logger.info(
+            "[DEBUG-ASYNC] _process_single_result: req=%s stage=%s output_type=%s images_count=%s",
+            req_id,
+            stage_id,
+            output_type,
+            len(images),
+        )
         response_metrics: dict[str, Any] = {}
         stage_metrics: dict[str, dict[str, Any]] = {}
         rid_key = str(req_id)

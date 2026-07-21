@@ -2243,7 +2243,11 @@ async def edit_images(
             )
             images = _extract_images_from_result(result)
 
-        logger.debug(f"Successfully generated {len(images)} image(s)")
+        logger.info(
+            "[DEBUG-ASYNC] edit_images: final images_count=%s, cot_output present=%s",
+            len(images),
+            cot_output is not None,
+        )
 
         # Encode images to base64
         image_data = [
