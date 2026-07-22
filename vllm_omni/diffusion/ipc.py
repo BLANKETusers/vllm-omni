@@ -52,6 +52,7 @@ def _tensor_to_shm(
             cpu.copy_(t, non_blocking=True)
         finally:
             torch.accelerator.set_stream(old_stream)
+        d2h_stream.synchronize()
         tensor = cpu
     else:
         tensor = tensor.detach().cpu().contiguous()
