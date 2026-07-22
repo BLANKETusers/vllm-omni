@@ -174,6 +174,17 @@ class NPUOmniPlatform(OmniPlatform, NPUPlatform):
         torch.npu.synchronize()
 
     @classmethod
+    def record_gpu_event(cls) -> torch.Event | None:
+        """Record a NPU event on the default stream to mark tensor readiness."""
+        try:
+            event = torch.npu.Event()
+            event.record()
+            return event
+        except Exception:
+            logger.warning("Failed to record NPU event for cross-stream sync")
+            return None
+
+    @classmethod
     def get_free_memory(cls, device: torch.device | None = None) -> int:
         free, _ = torch.npu.mem_get_info(device)
         return free
