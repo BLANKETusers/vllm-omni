@@ -1119,5 +1119,9 @@ def initialize_diffusion_stage(
     """
     from vllm_omni.diffusion.stage_diffusion_client import create_diffusion_client
 
+    logger.info("[DIAG-START] initialize_diffusion_stage: building od_config")
     od_config = build_diffusion_config(model, stage_cfg, metadata)
-    return create_diffusion_client(model, od_config, metadata, stage_init_timeout, batch_size, use_inline)
+    logger.info("[DIAG-START] initialize_diffusion_stage: calling create_diffusion_client (use_inline=%s)", use_inline)
+    client = create_diffusion_client(model, od_config, metadata, stage_init_timeout, batch_size, use_inline)
+    logger.info("[DIAG-START] initialize_diffusion_stage: client created")
+    return client

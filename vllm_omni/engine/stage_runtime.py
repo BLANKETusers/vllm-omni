@@ -633,6 +633,7 @@ class StageRuntime:
         stage_init_timeout: int,
     ) -> Any:
         """Initialize one local diffusion replica end-to-end."""
+        logger.info("[DIAG-START] _initialize_local_diffusion_replica: stage=%s starting", plan.metadata.stage_id)
         client = None
         resources = None
         try:
@@ -641,6 +642,9 @@ class StageRuntime:
                 if omni_conn_cfg:
                     inject_omni_kv_config(plan.stage_cfg, omni_conn_cfg, omni_from, omni_to)
                 inject_kv_stage_info(plan.stage_cfg, plan.metadata.stage_id, self._stage_configs)
+                logger.info(
+                    "[DIAG-START] _initialize_local_diffusion_replica: about to call launch_diffusion_stage_replica"
+                )
                 client, resources = launch_diffusion_stage_replica(
                     model=self._model,
                     stage_config=plan.stage_cfg,

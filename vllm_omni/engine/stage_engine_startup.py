@@ -1409,7 +1409,9 @@ def launch_diffusion_stage_replica(
     local mode registers with ``OmniMasterServer`` and spawns a
     ``StageDiffusionProc`` that heartbeats to ``OmniCoordinator``.
     """
+    logger.info("[DIAG-START] launch_diffusion_stage_replica: use_inline=%s", use_inline)
     if omni_master_server is None:
+        logger.info("[DIAG-START] launch_diffusion_stage_replica: calling initialize_diffusion_stage (inline mode)")
         client = initialize_diffusion_stage(
             metadata.stage_id,
             model,

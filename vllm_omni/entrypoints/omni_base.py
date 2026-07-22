@@ -170,6 +170,7 @@ class OmniBase(PDDisaggregationMixin):
         # TX-side emit; see Orchestrator._forward_to_next_stage).
         self.transfer_metrics = OmniTransferMetrics(model_name=model, log_stats=log_stats)
         st = time.time()
+        logger.info("[DIAG-START] OmniBase: about to create AsyncOmniEngine")
         self.engine = AsyncOmniEngine(
             model=model,
             init_timeout=init_timeout,
@@ -179,6 +180,7 @@ class OmniBase(PDDisaggregationMixin):
             log_stats=log_stats,
             **kwargs,
         )
+        logger.info("[DIAG-START] OmniBase: AsyncOmniEngine created")
         self._shutdown_called = False
         self._weak_finalizer = weakref.finalize(self, _weak_shutdown_engine, self.engine)
         et = time.time()

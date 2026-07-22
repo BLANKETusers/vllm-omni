@@ -481,10 +481,12 @@ async def omni_run_server_worker(listen_address, sock, args, client_config=None,
     if log_config is not None:
         uvicorn_kwargs["log_config"] = log_config
 
+    logger.info("[DIAG-START] omni_run_server_worker: about to build_async_omni")
     async with build_async_omni(
         args,
         client_config=client_config,
     ) as engine_client:
+        logger.info("[DIAG-START] omni_run_server_worker: build_async_omni completed")
         supported_tasks: tuple[str, ...]
         if hasattr(engine_client, "get_supported_tasks"):
             supported_tasks = tuple(await engine_client.get_supported_tasks())
@@ -691,7 +693,9 @@ async def build_async_omni_from_stage_config(
         kwargs = args.get_explicit_kwargs_dict()
         model = kwargs.pop("model", None) or args.model
         kwargs.setdefault("log_stats", not args.disable_log_stats)
+        logger.info("[DIAG-START] build_async_omni_from_stage_config: about to create AsyncOmni")
         async_omni = AsyncOmni(model=model, **kwargs)
+        logger.info("[DIAG-START] build_async_omni_from_stage_config: AsyncOmni created successfully")
 
         # # Don't keep the dummy data in memory
         # await async_llm.reset_mm_cache()

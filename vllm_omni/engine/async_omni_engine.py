@@ -363,6 +363,7 @@ class AsyncOmniEngine:
 
     def _initialize_stages(self, stage_init_timeout: int) -> None:
         """Initialize stage clients/processors via StageRuntime and assign to self."""
+        logger.info("[DIAG-START] _initialize_stages: about to create_stage_runtime")
         self._runtime = create_stage_runtime(
             stage_configs=self.stage_configs,
             model=self.model,
@@ -380,7 +381,9 @@ class AsyncOmniEngine:
             omni_lb_policy=self._omni_lb_policy,
             request_queue=self.request_queue,
         )
+        logger.info("[DIAG-START] _initialize_stages: create_stage_runtime done, about to call runtime.initialize()")
         self._runtime.initialize()
+        logger.info("[DIAG-START] _initialize_stages: runtime.initialize() completed")
 
         self.num_stages = len(self.stage_configs)
         self.stage_pools = self._runtime.stage_pools
@@ -426,11 +429,14 @@ class AsyncOmniEngine:
     ) -> None:
         """Create loop, initialize stages, then run Orchestrator."""
 
+        logger.info("[DIAG-START] _bootstrap_orchestrator: thread started, about to create event loop")
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
         async def _run_orchestrator() -> None:
+            logger.info("[DIAG-START] _run_orchestrator: about to call _initialize_stages()")
             self._initialize_stages(stage_init_timeout)
+            logger.info("[DIAG-START] _run_orchestrator: _initialize_stages() completed")
 
             pd_config = self._detect_pd_config()
 
@@ -491,7 +497,9 @@ class AsyncOmniEngine:
         """
         Wait for orchestrator startup future to return ready. Raises exception on any failures to the init process.
         """
+        logger.info("[DIAG-START] _wait_for_orchestrator_init: waiting (timeout=%ds)", startup_timeout)
         deadline = time.monotonic() + startup_timeout
+        poll_count = 0
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -503,6 +511,14 @@ class AsyncOmniEngine:
                 )
                 break
             except concurrent.futures.TimeoutError:
+                poll_count += 1
+                if poll_count % 30 == 0:  # log every ~30 seconds
+                    elapsed = startup_timeout - remaining
+                    logger.info(
+                        "[DIAG-START] _wait_for_orchestrator_init: still waiting (%.0fs elapsed, %.0fs remaining)",
+                        elapsed,
+                        remaining,
+                    )
                 if not self.orchestrator_thread.is_alive():
                     self._try_shutdown("[AsyncOmniEngine] Failed to cleanup after orchestrator startup failure")
                     if startup_future.done():
@@ -511,6 +527,7 @@ class AsyncOmniEngine:
             except Exception:
                 self._try_shutdown("[AsyncOmniEngine] Failed to cleanup after orchestrator startup failure")
                 raise
+        logger.info("[DIAG-START] _wait_for_orchestrator_init: orchestrator ready")
 
     # ---- request helpers ----
 
