@@ -1106,6 +1106,7 @@ class AsyncOmniEngine:
                     "devices": devices,
                 },
                 "engine_args": stage_engine_args,
+                "engine_input_source": [],
                 "default_sampling_params": stage_default_sampling_params,
                 "final_output": True,
                 "final_output_type": final_output_type,
