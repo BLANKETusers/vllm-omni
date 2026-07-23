@@ -840,10 +840,9 @@ class WorkerProc:
             return
 
         # Async path: enqueue compute_done immediately, bg thread does D2H+SHM.
-        # DEBUG: temporarily disabled to verify async D2H is the root cause of NPU pixel artifacts
-        if False and not self.od_config.step_execution and isinstance(output, (DiffusionOutput, BatchRunnerOutput)):
+        if not self.od_config.step_execution and isinstance(output, (DiffusionOutput, BatchRunnerOutput)):
             async_output_id = WorkerProc._generate_async_output_id()
-            gpu_event = current_omni_platform.record_gpu_event()
+            gpu_event = current_omni_platform.record_device_event()
             self._async_output_queue.put((output, async_output_id, gpu_event))
             msg = AsyncDiffusionOutput(
                 kind=AsyncOutputKind.COMPUTE_DONE,

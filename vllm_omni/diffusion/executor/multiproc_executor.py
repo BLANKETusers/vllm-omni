@@ -465,8 +465,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         # so the D2H copy runs on a side stream in the worker background
         # thread while the default stream is free for the next forward.
         # pump routes the result back to a Future via rpc_id.
-        # DEBUG: temporarily disabled to verify async D2H is the root cause of NPU pixel artifacts
-        if False and not self.od_config.step_execution and method in ("execute_model", "execute_model_batch"):
+        if not self.od_config.step_execution and method in ("execute_model", "execute_model_batch"):
             rpc_id = self._next_rpc_id()
             rpc_request["rpc_id"] = rpc_id
             fut: concurrent.futures.Future = concurrent.futures.Future()

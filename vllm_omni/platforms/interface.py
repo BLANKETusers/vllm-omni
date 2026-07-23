@@ -191,8 +191,15 @@ class OmniPlatform(Platform):
     # ── Async diffusion output: Stream / Event helpers ──
 
     @classmethod
-    def record_gpu_event(cls):
-        """Record a device event on the default stream to mark tensor readiness."""
+    def record_device_event(cls):
+        """Record a device event on the default stream to mark tensor readiness.
+
+        On platforms where distributed communication (e.g. HCCL) may use
+        internal streams not visible to the default stream, this method
+        should synchronize the default stream before recording the event
+        to ensure the event captures all completed work including
+        cross-device communication results.
+        """
         raise NotImplementedError
 
     @classmethod

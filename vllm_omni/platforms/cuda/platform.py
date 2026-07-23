@@ -234,7 +234,7 @@ class CudaOmniPlatform(OmniPlatform, CudaPlatformBase):
         torch.accelerator.synchronize()
 
     @classmethod
-    def record_gpu_event(cls) -> torch.Event | None:
+    def record_device_event(cls) -> torch.Event | None:
         """Record a device event on the default stream to mark tensor readiness."""
         try:
             event = torch.Event()
