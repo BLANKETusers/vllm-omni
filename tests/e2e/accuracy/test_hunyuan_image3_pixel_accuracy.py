@@ -34,7 +34,18 @@ SSIM_THRESHOLD = 0.97
 PSNR_THRESHOLD = 30.0
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-BASELINE_PATH = _REPO_ROOT / "tests" / "assets" / "hunyuan" / "hunyuan_baseline.png"
+_BASELINE_DIR = _REPO_ROOT / "tests" / "assets" / "hunyuan"
+
+
+def _baseline_path() -> Path:
+    from vllm_omni.platforms import current_omni_platform
+
+    suffix = "_npu" if current_omni_platform.is_npu() else ""
+    path = _BASELINE_DIR / f"hunyuan_baseline{suffix}.png"
+    assert path.exists(), f"Baseline image not found at {path}"
+    return path
+
+
 _OFFLINE_SCRIPT = _REPO_ROOT / "examples" / "offline_inference" / "hunyuan_image3" / "end2end.py"
 
 # DiT-only deploy config with trust_remote_code (based on hunyuan_image3_dit.yaml).
@@ -214,8 +225,8 @@ def _run_vllm_omni_hunyuan_image3_offline(*, model: str, deploy_config: str, out
 
 
 def _assert_against_baseline(image: Image.Image, label: str) -> None:
-    assert BASELINE_PATH.exists(), f"Baseline image not found at {BASELINE_PATH}"
-    baseline_image = Image.open(BASELINE_PATH).convert("RGB")
+    baseline_path = _baseline_path()
+    baseline_image = Image.open(baseline_path).convert("RGB")
 
     assert_images_pixel_close(
         model_name=f"{MODEL_NAME} ({label} vs baseline)",
