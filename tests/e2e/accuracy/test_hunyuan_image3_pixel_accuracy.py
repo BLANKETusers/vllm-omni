@@ -139,6 +139,7 @@ def _wait_for_server_ready(omni_server: OmniServer, timeout_s: int = 300) -> Non
             resp = requests.get(
                 f"http://{omni_server.host}:{omni_server.port}/health",
                 timeout=10,
+                proxies={"http": None},
             )
             if resp.status_code == 200:
                 return
@@ -177,6 +178,7 @@ def _run_vllm_omni_hunyuan_image3_online(*, model: str, deploy_config: str, outp
                 "use_system_prompt": "en_unified",
             },
             timeout=_request_timeout(),
+            proxies={"http": None},
         )
         response.raise_for_status()
         payload = response.json()
