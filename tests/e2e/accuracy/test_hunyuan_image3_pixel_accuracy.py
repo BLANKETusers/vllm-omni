@@ -92,6 +92,23 @@ _DEPLOY_CONFIG = {
             },
         },
     ],
+    "platforms": {
+        "npu": {
+            "stages": [
+                {
+                    "stage_id": 0,
+                    "gpu_memory_utilization": 0.65,
+                    "devices": "0,1,2,3",
+                    "moe_backend": "auto",
+                    "max_num_batched_tokens": 32768,
+                    "parallel_config": {
+                        "tensor_parallel_size": 4,
+                        "enable_expert_parallel": True,
+                    },
+                },
+            ],
+        },
+    },
 }
 
 
