@@ -38,6 +38,12 @@ def _psnr_threshold() -> float:
     return PSNR_THRESHOLD_NPU if current_omni_platform.is_npu() else PSNR_THRESHOLD_CUDA
 
 
+def _request_timeout() -> int:
+    from vllm_omni.platforms import current_omni_platform
+
+    return 1200 if current_omni_platform.is_npu() else 600
+
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _BASELINE_DIR = _REPO_ROOT / "tests" / "assets" / "hunyuan"
 
@@ -133,7 +139,7 @@ def _run_vllm_omni_hunyuan_image3_online(*, model: str, deploy_config: str, outp
                 "bot_task": "none",
                 "use_system_prompt": "en_unified",
             },
-            timeout=600,
+            timeout=_request_timeout(),
         )
         response.raise_for_status()
         payload = response.json()
