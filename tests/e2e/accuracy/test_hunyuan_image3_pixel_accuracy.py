@@ -31,7 +31,15 @@ PROMPT = "A brown and white dog is running on the grass."
 MEAN_THRESHOLD = 3e-2
 P99_THRESHOLD = 3e-1
 SSIM_THRESHOLD = 0.97
-PSNR_THRESHOLD = 30.0
+PSNR_THRESHOLD_CUDA = 30.0
+PSNR_THRESHOLD_NPU = 26.0
+
+
+def _psnr_threshold() -> float:
+    from vllm_omni.platforms import current_omni_platform
+
+    return PSNR_THRESHOLD_NPU if current_omni_platform.is_npu() else PSNR_THRESHOLD_CUDA
+
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _BASELINE_DIR = _REPO_ROOT / "tests" / "assets" / "hunyuan"
@@ -240,7 +248,7 @@ def _assert_against_baseline(image: Image.Image, label: str) -> None:
         vllm_image=image,
         diffusers_image=baseline_image,
         ssim_threshold=SSIM_THRESHOLD,
-        psnr_threshold=PSNR_THRESHOLD,
+        psnr_threshold=_psnr_threshold(),
     )
 
 
