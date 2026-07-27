@@ -5,7 +5,6 @@ import copy
 import io
 import os
 import tempfile
-import time
 from pathlib import Path
 
 import pytest
@@ -37,12 +36,6 @@ def _psnr_threshold() -> float:
     from vllm_omni.platforms import current_omni_platform
 
     return PSNR_THRESHOLD_NPU if current_omni_platform.is_npu() else PSNR_THRESHOLD_CUDA
-
-
-def _request_timeout() -> int:
-    from vllm_omni.platforms import current_omni_platform
-
-    return 1200 if current_omni_platform.is_npu() else 600
 
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -131,25 +124,6 @@ def _write_deploy_config(path: Path) -> None:
     path.write_text(yaml.dump(config, default_flow_style=False, sort_keys=False))
 
 
-def _wait_for_server_ready(omni_server: OmniServer, timeout_s: int = 300) -> None:
-    """Poll /health until the server responds 200, or raise on timeout/error."""
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        try:
-            resp = requests.get(
-                f"http://{omni_server.host}:{omni_server.port}/health",
-                timeout=10,
-                proxies={"http": None},
-            )
-            if resp.status_code == 200:
-                return
-            print(f"[health] Server returned {resp.status_code}: {resp.text[:500]}")
-        except requests.RequestException as e:
-            print(f"[health] Not ready: {e}")
-        time.sleep(5)
-    raise RuntimeError(f"Server /health did not return 200 within {timeout_s}s")
-
-
 def _run_vllm_omni_hunyuan_image3_online(*, model: str, deploy_config: str, output_path: Path) -> Image.Image:
     server_args = [
         "--deploy-config",
@@ -162,7 +136,6 @@ def _run_vllm_omni_hunyuan_image3_online(*, model: str, deploy_config: str, outp
         "--trust-remote-code",
     ]
     with OmniServer(model, server_args, use_omni=True) as omni_server:
-        _wait_for_server_ready(omni_server)
         response = requests.post(
             f"http://{omni_server.host}:{omni_server.port}/v1/images/generations",
             json={
@@ -177,8 +150,7 @@ def _run_vllm_omni_hunyuan_image3_online(*, model: str, deploy_config: str, outp
                 "bot_task": "none",
                 "use_system_prompt": "en_unified",
             },
-            timeout=_request_timeout(),
-            proxies={"http": None},
+            timeout=600,
         )
         response.raise_for_status()
         payload = response.json()
