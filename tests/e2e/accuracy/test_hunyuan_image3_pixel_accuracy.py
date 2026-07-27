@@ -166,12 +166,6 @@ def _write_deploy_config(path: Path) -> None:
     )
 
 
-def _request_timeout() -> int:
-    from vllm_omni.platforms import current_omni_platform
-
-    return 1200 if current_omni_platform.is_npu() else 600
-
-
 def _run_vllm_omni_hunyuan_image3_online(*, model: str, deploy_config: str, output_path: Path) -> Image.Image:
     server_args = [
         "--deploy-config",
@@ -198,8 +192,7 @@ def _run_vllm_omni_hunyuan_image3_online(*, model: str, deploy_config: str, outp
                 "bot_task": "none",
                 "use_system_prompt": "en_unified",
             },
-            timeout=_request_timeout(),
-            proxies={"http": None},
+            timeout=600,
         )
         response.raise_for_status()
         payload = response.json()
