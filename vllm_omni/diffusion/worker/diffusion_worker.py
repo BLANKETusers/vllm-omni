@@ -1017,7 +1017,18 @@ class WorkerProc:
                 except Exception as e:
                     logger.error(f"Error processing RPC: {e}", exc_info=True)
                     if self.result_mq is not None:
-                        self._return_result({"status": "error", "error": str(e)})
+                        if rpc_id is not None:
+                            # Async RPC: must complete the executor''s pending
+                            # future so collective_rpc() doesn''t hang.
+                            self.result_mq.enqueue(
+                                AsyncDiffusionOutput(
+                                    kind=AsyncOutputKind.RPC_RESULT,
+                                    rpc_id=rpc_id,
+                                    error=str(e),
+                                )
+                            )
+                        else:
+                            self._return_result({"status": "error", "error": str(e)})
 
             elif isinstance(msg, dict) and msg.get("type") == "shutdown":
                 logger.info("Worker %s: Received shutdown message", self.gpu_id)

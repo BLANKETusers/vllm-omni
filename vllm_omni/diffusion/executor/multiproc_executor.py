@@ -101,7 +101,8 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         self._rpc_id_lock = threading.Lock()
         self._rpc_futures: dict[str, concurrent.futures.Future[AsyncDiffusionOutput]] = {}
         self._output_futures: dict[str, concurrent.futures.Future[DiffusionOutput]] = {}
-        self._completed_outputs: dict[str, DiffusionOutput] = {}
+        self._completed_outputs: dict[str, concurrent.futures.Future[DiffusionOutput]] = {}
+        self._batch_split_map: dict[str, dict[str, str]] = {}  # batch_id -> {per_req_id: request_id}
         self._futures_lock = threading.RLock()
         self._pump_running = False
         self._pump_stop = threading.Event()
@@ -405,12 +406,11 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         uses the single-request worker RPC. Waves with multiple requests use the
         fused request-batch RPC and require pipeline request-batch support.
 
-        When async output is enabled the D2H copy runs on a side CUDA stream
-        in the worker background thread, overlapping with the next forward on
-        the default stream.  The executor waits for D2H completion inline so
-        the caller still receives a fully materialised BatchRunnerOutput.
+        When async output is enabled, per-request async_output_ids are
+        propagated through RunnerOutput so the engine waits in
+        step_streaming() instead of blocking the busy loop here.
         """
-        from vllm_omni.diffusion.worker.utils import BatchRunnerOutput
+        from vllm_omni.diffusion.worker.utils import BatchRunnerOutput, RunnerOutput
 
         self._ensure_open()
         if len(scheduler_output.scheduled_new_reqs) <= 1:
@@ -423,8 +423,26 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             exec_all_ranks=True,
         )
         if isinstance(result, AsyncDiffusionOutput) and result.kind == AsyncOutputKind.COMPUTE_DONE:
-            fut = self.wait_output_ready(result.async_output_id)
-            result = fut.result(timeout=30.0)
+            # Propagate async_output_id to per-request RunnerOutputs so the
+            # engine waits in step_streaming() instead of blocking here.
+            batch_id = result.async_output_id
+            per_req_map: dict[str, str] = {}
+            runner_outputs: list[RunnerOutput] = []
+            for new_req in scheduler_output.scheduled_new_reqs:
+                per_req_id = f"{batch_id}/{new_req.request_id}"
+                per_req_map[per_req_id] = new_req.request_id
+                runner_outputs.append(
+                    RunnerOutput(
+                        request_id=new_req.request_id,
+                        step_index=None,
+                        finished=True,
+                        result=None,
+                        async_output_id=per_req_id,
+                    )
+                )
+            with self._futures_lock:
+                self._batch_split_map[batch_id] = per_req_map
+            return BatchRunnerOutput.from_list(runner_outputs)
         if not isinstance(result, BatchRunnerOutput):
             raise RuntimeError(f"Unexpected response type for execute_batch: {type(result)!r}")
         return result
@@ -558,29 +576,66 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                 with self._futures_lock:
                     fut = self._rpc_futures.pop(msg.rpc_id, None) if msg.rpc_id else None
                 if fut is not None and not fut.done():
-                    fut.set_result(msg)
-            elif msg.kind == AsyncOutputKind.OUTPUT_READY:
-                with self._futures_lock:
-                    fut = self._output_futures.pop(msg.async_output_id, None) if msg.async_output_id else None
-                if fut is not None and not fut.done():
                     if msg.error:
                         fut.set_exception(RuntimeError(msg.error))
                     else:
-                        try:
-                            unpack_diffusion_output_shm(msg.output)
-                        except Exception as e:
-                            logger.exception("SHM unpack failed in result pump")
-                            fut.set_exception(e)
-                            continue
-                        fut.set_result(msg.output)
-                elif msg.async_output_id:
-                    if not msg.error:
-                        try:
-                            unpack_diffusion_output_shm(msg.output)
-                        except Exception:
-                            logger.exception("SHM unpack failed in result pump (cached)")
+                        fut.set_result(msg)
+            elif msg.kind == AsyncOutputKind.OUTPUT_READY:
+                batch_id = msg.async_output_id
+                with self._futures_lock:
+                    per_req_map = self._batch_split_map.pop(batch_id, None) if batch_id else None
+                if per_req_map is not None:
+                    # Batch result: split into per-request DiffusionOutputs.
+                    try:
+                        unpack_diffusion_output_shm(msg.output)
+                    except Exception:
+                        logger.exception("SHM unpack failed for batch %s", batch_id)
+                    batch_output = msg.output
+                    for per_req_id, req_id in per_req_map.items():
+                        req_output = batch_output.get_request_output(req_id)
+                        per_req_result: DiffusionOutput
+                        if req_output is not None and req_output.result is not None:
+                            per_req_result = req_output.result
+                        elif msg.error:
+                            per_req_result = DiffusionOutput(error=msg.error)
+                        else:
+                            per_req_result = DiffusionOutput(error="No output result for batch request")
+                        fut: concurrent.futures.Future = concurrent.futures.Future()
+                        fut.set_result(per_req_result)
+                        with self._futures_lock:
+                            pending = self._output_futures.pop(per_req_id, None)
+                            if pending is not None and not pending.done():
+                                pending.set_result(per_req_result)
+                            else:
+                                self._completed_outputs[per_req_id] = fut
+                else:
                     with self._futures_lock:
-                        self._completed_outputs[msg.async_output_id] = msg.output
+                        fut = self._output_futures.pop(batch_id, None) if batch_id else None
+                    if fut is not None and not fut.done():
+                        if msg.error:
+                            fut.set_exception(RuntimeError(msg.error))
+                        else:
+                            try:
+                                unpack_diffusion_output_shm(msg.output)
+                            except Exception as e:
+                                logger.exception("SHM unpack failed in result pump")
+                                fut.set_exception(e)
+                                continue
+                            fut.set_result(msg.output)
+                    elif batch_id:
+                        fut = concurrent.futures.Future()
+                        if msg.error:
+                            fut.set_exception(RuntimeError(msg.error))
+                        else:
+                            try:
+                                unpack_diffusion_output_shm(msg.output)
+                            except Exception as e:
+                                logger.exception("SHM unpack failed in result pump (cached)")
+                                fut.set_exception(e)
+                            else:
+                                fut.set_result(msg.output)
+                        with self._futures_lock:
+                            self._completed_outputs[batch_id] = fut
 
     def _next_rpc_id(self) -> str:
         with self._rpc_id_lock:
@@ -592,9 +647,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         with self._futures_lock:
             cached = self._completed_outputs.pop(async_output_id, None)
             if cached is not None:
-                fut: concurrent.futures.Future = concurrent.futures.Future()
-                fut.set_result(cached)
-                return fut
+                return cached
             fut: concurrent.futures.Future = concurrent.futures.Future()
             self._output_futures[async_output_id] = fut
         return fut
@@ -625,5 +678,6 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                         fut.set_exception(RuntimeError("Executor shut down"))
                 self._rpc_futures.clear()
                 self._output_futures.clear()
+                self._batch_split_map.clear()
             self._shutdown_cleaner = None
             self._processes = []
