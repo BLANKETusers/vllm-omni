@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import concurrent.futures
 import multiprocessing as mp
 import multiprocessing.connection
+import queue
 import threading
 import time
 import weakref
@@ -15,7 +17,7 @@ from vllm.distributed.device_communicators.shm_broadcast import Handle, MessageQ
 from vllm.logger import init_logger
 from vllm.v1.engine.exceptions import EngineDeadError
 
-from vllm_omni.diffusion.data import SHUTDOWN_MESSAGE, DiffusionOutput
+from vllm_omni.diffusion.data import SHUTDOWN_MESSAGE, AsyncDiffusionOutput, AsyncOutputKind, DiffusionOutput
 from vllm_omni.diffusion.executor.abstract import DiffusionExecutor
 from vllm_omni.diffusion.ipc import DIFFUSION_RPC_RESULT_ENVELOPE, unpack_diffusion_output_shm
 from vllm_omni.diffusion.worker import WorkerProc
@@ -93,6 +95,22 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             self.shutdown()
             raise
 
+        # Async output: result pump thread for dispatching AsyncDiffusionOutput
+        # messages in request-mode (step_execution=False).
+        self._rpc_id_counter = 0
+        self._rpc_id_lock = threading.Lock()
+        self._rpc_futures: dict[str, concurrent.futures.Future[AsyncDiffusionOutput]] = {}
+        self._output_futures: dict[str, concurrent.futures.Future[DiffusionOutput]] = {}
+        self._completed_outputs: dict[str, DiffusionOutput] = {}
+        self._futures_lock = threading.RLock()
+        self._pump_running = False
+        self._pump_stop = threading.Event()
+        # When pump is active it is the sole reader of result_mq; non-async
+        # messages are placed here for collective_rpc() to consume.
+        self._sync_result_buffer: queue.Queue = queue.Queue()
+        if not self.od_config.step_execution:
+            self._start_result_pump()
+
         self._start_worker_monitor()
 
     def _init_broadcast_queue(self, num_workers: int) -> MessageQueue:
@@ -116,7 +134,12 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             raise RuntimeError("Broadcast queue is closed")
 
     def _dequeue_one_with_failure_polling(self, deadline: float | None, method: str) -> Any:
-        """Block until one result message, polling ``_is_failed`` between chunk timeouts."""
+        """Block until one result message, polling ``_is_failed`` between chunk timeouts.
+
+        When async output is enabled, pump is the sole reader of result_mq;
+        non-async messages are placed in _sync_result_buffer, so this method
+        reads from there instead of result_mq directly.
+        """
         while True:
             if deadline is None:
                 chunk_timeout = _DEQUEUE_TIMEOUT_S
@@ -125,12 +148,20 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                 if remaining <= 0:
                     raise TimeoutError(f"RPC call to {method} timed out.")
                 chunk_timeout = min(_DEQUEUE_TIMEOUT_S, remaining)
-            try:
-                return self._result_mq.dequeue(timeout=chunk_timeout)  # pyright: ignore[reportOptionalMemberAccess] MQ is not None before shutdown
-            except (TimeoutError, zmq.error.Again):
-                if self._is_failed:
-                    raise EngineDeadError()
-                continue
+            if not self.od_config.step_execution:
+                try:
+                    return self._sync_result_buffer.get(timeout=chunk_timeout)
+                except queue.Empty:
+                    if self._is_failed or self._closed:
+                        raise EngineDeadError()
+                    continue
+            else:
+                try:
+                    return self._result_mq.dequeue(timeout=chunk_timeout)  # pyright: ignore[reportOptionalMemberAccess] MQ is not None before shutdown
+                except (TimeoutError, zmq.error.Again):
+                    if self._is_failed:
+                        raise EngineDeadError()
+                    continue
 
     @staticmethod
     def _raise_for_rpc_error_dict(response: Any) -> None:
@@ -318,6 +349,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         """Adapt request-mode scheduler output to worker execute_model RPCs.
 
         Returns a BatchRunnerOutput with one RunnerOutput per scheduled request.
+        In async mode the result may carry async_output_id instead of the final output.
         """
         from vllm_omni.diffusion.worker.utils import BatchRunnerOutput, RunnerOutput
 
@@ -333,16 +365,27 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                     unique_reply_rank=0,
                     exec_all_ranks=True,
                 )
-                if not isinstance(result, DiffusionOutput):
-                    raise RuntimeError(f"Unexpected response type: {type(result)!r}")
-                runner_outputs.append(
-                    RunnerOutput(
-                        request_id=new_req.request_id,
-                        step_index=None,
-                        finished=True,
-                        result=result,
+                if isinstance(result, AsyncDiffusionOutput) and result.kind == AsyncOutputKind.COMPUTE_DONE:
+                    runner_outputs.append(
+                        RunnerOutput(
+                            request_id=new_req.request_id,
+                            step_index=None,
+                            finished=True,
+                            result=None,
+                            async_output_id=result.async_output_id,
+                        )
                     )
-                )
+                elif isinstance(result, DiffusionOutput):
+                    runner_outputs.append(
+                        RunnerOutput(
+                            request_id=new_req.request_id,
+                            step_index=None,
+                            finished=True,
+                            result=result,
+                        )
+                    )
+                else:
+                    raise RuntimeError(f"Unexpected response type: {type(result)!r}")
             except Exception as exc:
                 runner_outputs.append(
                     RunnerOutput(
@@ -361,6 +404,11 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         A scheduler wave with one request is the conservative serial case and
         uses the single-request worker RPC. Waves with multiple requests use the
         fused request-batch RPC and require pipeline request-batch support.
+
+        When async output is enabled the D2H copy runs on a side CUDA stream
+        in the worker background thread, overlapping with the next forward on
+        the default stream.  The executor waits for D2H completion inline so
+        the caller still receives a fully materialised BatchRunnerOutput.
         """
         from vllm_omni.diffusion.worker.utils import BatchRunnerOutput
 
@@ -374,6 +422,9 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             unique_reply_rank=0,
             exec_all_ranks=True,
         )
+        if isinstance(result, AsyncDiffusionOutput) and result.kind == AsyncOutputKind.COMPUTE_DONE:
+            fut = self.wait_output_ready(result.async_output_id)
+            result = fut.result(timeout=30.0)
         if not isinstance(result, BatchRunnerOutput):
             raise RuntimeError(f"Unexpected response type for execute_batch: {type(result)!r}")
         return result
@@ -408,11 +459,6 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         deadline = None if timeout is None else time.monotonic() + timeout
         kwargs = kwargs or {}
 
-        # Prepare RPC request message. When unique_reply_rank is None, all
-        # workers must execute the RPC but only rank 0 can reply (it's the
-        # only one with a result_mq). Collect detailed rank statuses only for
-        # this control-plane all-rank path; forward-path exec_all_ranks RPCs
-        # avoid the per-step host object gather.
         execute_all_ranks = unique_reply_rank is None or exec_all_ranks
         collect_rank_status = unique_reply_rank is None
         rpc_request = {
@@ -425,11 +471,32 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             "collect_rank_status": collect_rank_status,
         }
 
+        # ── Path 1: async execute_model / execute_model_batch ──
+        # Request-mode methods use the compute_done/output_ready split
+        # so the D2H copy runs on a side stream in the worker background
+        # thread while the default stream is free for the next forward.
+        # pump routes the result back to a Future via rpc_id.
+        if not self.od_config.step_execution and method in ("execute_model", "execute_model_batch"):
+            rpc_id = self._next_rpc_id()
+            rpc_request["rpc_id"] = rpc_id
+            fut: concurrent.futures.Future = concurrent.futures.Future()
+            with self._futures_lock:
+                self._rpc_futures[rpc_id] = fut
+            self._broadcast_mq.enqueue(rpc_request)  # pyright: ignore[reportOptionalMemberAccess] MQ is not None before shutdown
+            try:
+                return fut.result(timeout=timeout)
+            except concurrent.futures.TimeoutError:
+                with self._futures_lock:
+                    self._rpc_futures.pop(rpc_id, None)
+                raise TimeoutError(f"RPC call to {method} timed out.")
+
+        # ── Path 2: step-execution or other non-execute_model RPCs ──
+        # _dequeue_one_with_failure_polling reads from _sync_result_buffer
+        # when pump is active (request-mode), or result_mq directly otherwise.
         try:
             # Broadcast RPC request to all workers via unified message queue
             self._broadcast_mq.enqueue(rpc_request)  # pyright: ignore[reportOptionalMemberAccess] MQ is not None before shutdown
 
-            # Only rank 0 has a result_mq, so we always expect exactly 1 response
             num_responses = 1
 
             responses = []
@@ -450,6 +517,88 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             logger.error(f"RPC call failed: {e}")
             raise
 
+    # ------------------------------------------------------------------
+    # Async output: result pump
+    # ------------------------------------------------------------------
+
+    def _start_result_pump(self) -> None:
+        self._pump_running = True
+        self._pump_stop.clear()
+        self._result_pump_thread = threading.Thread(target=self._result_pump, daemon=True, name="DiffusionResultPump")
+        self._result_pump_thread.start()
+        logger.info("Async result pump started")
+
+    def _result_pump(self) -> None:
+        """Sole reader of result_mq when async output is enabled.
+
+        Dispatches AsyncDiffusionOutput messages to the appropriate future:
+        * RPC_RESULT / COMPUTE_DONE → _rpc_futures[rpc_id]
+        * OUTPUT_READY → _output_futures[async_output_id]
+        """
+        while not self._pump_stop.is_set():
+            try:
+                msg = self._result_mq.dequeue(timeout=1.0)
+            except TimeoutError:
+                if self._is_failed:
+                    break
+                continue
+            except Exception:
+                logger.exception("Result pump dequeue failed")
+                if self._is_failed:
+                    break
+                continue
+
+            if not isinstance(msg, AsyncDiffusionOutput):
+                # Non-async message: place into the sync buffer for
+                # collective_rpc() to consume via Path 2.
+                self._sync_result_buffer.put(msg)
+                continue
+
+            if msg.kind in (AsyncOutputKind.RPC_RESULT, AsyncOutputKind.COMPUTE_DONE):
+                with self._futures_lock:
+                    fut = self._rpc_futures.pop(msg.rpc_id, None) if msg.rpc_id else None
+                if fut is not None and not fut.done():
+                    fut.set_result(msg)
+            elif msg.kind == AsyncOutputKind.OUTPUT_READY:
+                with self._futures_lock:
+                    fut = self._output_futures.pop(msg.async_output_id, None) if msg.async_output_id else None
+                if fut is not None and not fut.done():
+                    if msg.error:
+                        fut.set_exception(RuntimeError(msg.error))
+                    else:
+                        try:
+                            unpack_diffusion_output_shm(msg.output)
+                        except Exception as e:
+                            logger.exception("SHM unpack failed in result pump")
+                            fut.set_exception(e)
+                            continue
+                        fut.set_result(msg.output)
+                elif msg.async_output_id:
+                    if not msg.error:
+                        try:
+                            unpack_diffusion_output_shm(msg.output)
+                        except Exception:
+                            logger.exception("SHM unpack failed in result pump (cached)")
+                    with self._futures_lock:
+                        self._completed_outputs[msg.async_output_id] = msg.output
+
+    def _next_rpc_id(self) -> str:
+        with self._rpc_id_lock:
+            self._rpc_id_counter += 1
+            return str(self._rpc_id_counter)
+
+    def wait_output_ready(self, async_output_id: str) -> concurrent.futures.Future[DiffusionOutput]:
+        """Return a Future that resolves when the async output is ready."""
+        with self._futures_lock:
+            cached = self._completed_outputs.pop(async_output_id, None)
+            if cached is not None:
+                fut: concurrent.futures.Future = concurrent.futures.Future()
+                fut.set_result(cached)
+                return fut
+            fut: concurrent.futures.Future = concurrent.futures.Future()
+            self._output_futures[async_output_id] = fut
+        return fut
+
     def check_health(self) -> None:
         if self._is_failed:
             raise EngineDeadError()
@@ -461,10 +610,20 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
 
     def shutdown(self) -> None:
         self._closed = True
+        self._pump_stop.set()
         try:
             self._finalizer()
         finally:
             self._broadcast_mq = None
             self._result_mq = None
+            with self._futures_lock:
+                for fut in self._rpc_futures.values():
+                    if not fut.done():
+                        fut.set_exception(RuntimeError("Executor shut down"))
+                for fut in self._output_futures.values():
+                    if not fut.done():
+                        fut.set_exception(RuntimeError("Executor shut down"))
+                self._rpc_futures.clear()
+                self._output_futures.clear()
             self._shutdown_cleaner = None
             self._processes = []
