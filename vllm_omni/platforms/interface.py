@@ -168,8 +168,12 @@ class OmniPlatform(Platform):
         should synchronize the default stream before recording the event
         to ensure the event captures all completed work including
         cross-device communication results.
+
+        Returns ``None`` by default so that platforms without a native
+        implementation (ROCm, XPU, MUSA) fall through to a safe no-op.
+        Override in platform subclasses to provide real event support.
         """
-        raise NotImplementedError
+        return None
 
     @classmethod
     def get_free_memory(cls, device: torch.device | None = None) -> int:
