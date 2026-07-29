@@ -29,6 +29,7 @@ def _make_executor(step_execution=False):
     executor._rpc_futures = {}
     executor._output_futures = {}
     executor._completed_outputs = {}
+    executor._batch_split_map = {}
     executor._futures_lock = threading.RLock()
     executor._pump_running = False
     executor._pump_stop = threading.Event()
@@ -123,8 +124,10 @@ class TestWaitOutputReady:
     def test_returns_cached_future_when_already_completed(self):
         executor = _make_executor()
         output = DiffusionOutput(output="cached_data")
+        fut = concurrent.futures.Future()
+        fut.set_result(output)
         with executor._futures_lock:
-            executor._completed_outputs["abc123"] = output
+            executor._completed_outputs["abc123"] = fut
 
         fut = executor.wait_output_ready("abc123")
         assert fut.done()
