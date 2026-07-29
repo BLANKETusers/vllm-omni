@@ -1602,6 +1602,10 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
                 self._size_token_id,
             ]
 
+        # AR→Diffusion pooler only needs the generated tokens; skip the
+        # per-step blocking hidden_states[:n].to("cpu") copy.
+        self.omni_pooler_payload_include_hidden = False
+
         self._sampler: Sampler | None = None
         self._eos_token_id: int = tokenizer.eos_token_id
         # Lazily built on first sample() call so we can pick up logits.device
