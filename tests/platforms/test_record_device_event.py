@@ -8,13 +8,12 @@ pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 
 class TestOmniPlatformRecordDeviceEventInterface:
-    """Test that the base OmniPlatform raises NotImplementedError."""
+    """Test that the base OmniPlatform returns None (safe no-op fallback)."""
 
-    def test_base_class_raises_not_implemented(self):
+    def test_base_class_returns_none(self):
         from vllm_omni.platforms.interface import OmniPlatform
 
-        with pytest.raises(NotImplementedError):
-            OmniPlatform.record_device_event()
+        assert OmniPlatform.record_device_event() is None
 
 
 class TestCudaOmniPlatformRecordDeviceEvent:
