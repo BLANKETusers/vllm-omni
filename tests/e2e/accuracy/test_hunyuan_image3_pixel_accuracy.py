@@ -15,6 +15,7 @@ from PIL import Image
 
 from tests.e2e.accuracy.helpers import assert_images_pixel_close, assert_similarity, model_output_dir
 from tests.helpers.mark import hardware_test
+from tests.helpers.media import get_asset_path
 from tests.helpers.runtime import OmniServer
 
 pytestmark = [pytest.mark.full_model, pytest.mark.diffusion]
@@ -42,14 +43,13 @@ def _psnr_threshold() -> float:
 
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-_BASELINE_DIR = _REPO_ROOT / "tests" / "assets" / "hunyuan"
 
 
 def _baseline_path() -> Path:
     from vllm_omni.platforms import current_omni_platform
 
     suffix = "_npu" if current_omni_platform.is_npu() else ""
-    path = _BASELINE_DIR / f"hunyuan_baseline{suffix}.png"
+    path = get_asset_path(f"hunyuan/hunyuan_baseline{suffix}.png")
     assert path.exists(), f"Baseline image not found at {path}"
     return path
 
