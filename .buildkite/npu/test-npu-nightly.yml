@@ -111,6 +111,7 @@ steps:
           HUNYUAN_IMAGE3_MODEL: "tencent/HunyuanImage-3.0-Instruct"
           HUNYUAN_IMAGE3_DEVICES: "0,1,2,3"
           DIFFUSION_ATTENTION_BACKEND: TORCH_SDPA
+          DIFFUSION_ASYNC_OUTPUT_TIMEOUT: "120"
         commands:
           - pytest -s -v tests/e2e/accuracy/test_hunyuan_image3_pixel_accuracy.py -m "full_model and A3" --run-level full_model
   - group: ":card_index_dividers: Diffusion Benchmark Perf Test"
@@ -128,6 +129,7 @@ steps:
           VLLM_WORKER_MULTIPROC_METHOD: spawn
           HF_TOKEN: "${HF_TOKEN}"
           DIFFUSION_ATTENTION_BACKEND: TORCH_SDPA
+          DIFFUSION_ASYNC_OUTPUT_TIMEOUT: "120"
         commands:
           - export DIFFUSION_BENCHMARK_DIR=tests/dfx/perf/results
           - |
@@ -144,6 +146,7 @@ steps:
           VLLM_WORKER_MULTIPROC_METHOD: spawn
           HF_TOKEN: "${HF_TOKEN}"
           DIFFUSION_ATTENTION_BACKEND: TORCH_SDPA
+          DIFFUSION_ASYNC_OUTPUT_TIMEOUT: "120"
         commands:
           - export DIFFUSION_BENCHMARK_DIR=tests/dfx/perf/results
           - |
@@ -160,6 +163,7 @@ steps:
           VLLM_WORKER_MULTIPROC_METHOD: spawn
           HF_TOKEN: "${HF_TOKEN}"
           DIFFUSION_ATTENTION_BACKEND: TORCH_SDPA
+          DIFFUSION_ASYNC_OUTPUT_TIMEOUT: "120"
         commands:
           - export DIFFUSION_BENCHMARK_DIR=tests/dfx/perf/results
           - |
@@ -176,6 +180,7 @@ steps:
           VLLM_WORKER_MULTIPROC_METHOD: spawn
           HF_TOKEN: "${HF_TOKEN}"
           DIFFUSION_ATTENTION_BACKEND: TORCH_SDPA
+          DIFFUSION_ASYNC_OUTPUT_TIMEOUT: "120"
         commands:
           - export DIFFUSION_BENCHMARK_DIR=tests/dfx/perf/results
           - |
