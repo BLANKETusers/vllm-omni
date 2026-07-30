@@ -127,6 +127,7 @@ steps:
         env:
           VLLM_WORKER_MULTIPROC_METHOD: spawn
           HF_TOKEN: "${HF_TOKEN}"
+          DIFFUSION_ATTENTION_BACKEND: TORCH_SDPA
         commands:
           - export DIFFUSION_BENCHMARK_DIR=tests/dfx/perf/results
           - |
@@ -142,6 +143,7 @@ steps:
         env:
           VLLM_WORKER_MULTIPROC_METHOD: spawn
           HF_TOKEN: "${HF_TOKEN}"
+          DIFFUSION_ATTENTION_BACKEND: TORCH_SDPA
         commands:
           - export DIFFUSION_BENCHMARK_DIR=tests/dfx/perf/results
           - |
@@ -157,6 +159,7 @@ steps:
         env:
           VLLM_WORKER_MULTIPROC_METHOD: spawn
           HF_TOKEN: "${HF_TOKEN}"
+          DIFFUSION_ATTENTION_BACKEND: TORCH_SDPA
         commands:
           - export DIFFUSION_BENCHMARK_DIR=tests/dfx/perf/results
           - |
@@ -172,6 +175,7 @@ steps:
         env:
           VLLM_WORKER_MULTIPROC_METHOD: spawn
           HF_TOKEN: "${HF_TOKEN}"
+          DIFFUSION_ATTENTION_BACKEND: TORCH_SDPA
         commands:
           - export DIFFUSION_BENCHMARK_DIR=tests/dfx/perf/results
           - |
