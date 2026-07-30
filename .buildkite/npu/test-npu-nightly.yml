@@ -96,7 +96,7 @@ steps:
             buildkite-agent artifact upload "tests/dfx/perf/results/logs/*.log"
             exit $$EXIT
   - group: ":card_index_dividers: Diffusion I2I Model Test"
-    key: nightly-HunyuanImage3-i2i-test-group
+    key: nightly-HunyuanImage3-x2i-test-group
     depends_on: upload-nightly-pipeline
     if: >-
       build.env("NIGHTLY") == "1" ||
@@ -111,7 +111,7 @@ steps:
           HUNYUAN_IMAGE3_MODEL: "tencent/HunyuanImage-3.0-Instruct"
           HUNYUAN_IMAGE3_DEVICES: "0,1,2,3"
         commands:
-          - pytest -s -v tests/e2e/accuracy/test_hunyuan_image3_pixel_accuracy.py -m full_model --run-level full_model
+          - pytest -s -v tests/e2e/accuracy/test_hunyuan_image3_pixel_accuracy.py -m "full_model and A3" --run-level full_model
   - group: ":card_index_dividers: Diffusion Benchmark Perf Test"
     key: nightly-diffusion-benchmark-group
     depends_on: upload-nightly-pipeline
@@ -130,7 +130,7 @@ steps:
           - export DIFFUSION_BENCHMARK_DIR=tests/dfx/perf/results
           - |
             set +e
-            pytest -s -v tests/dfx/perf/scripts/run_diffusion_benchmark.py -m npu --test-config-file tests/dfx/perf/tests/test_hunyuan_image_tp2_cfgp2.json
+            pytest -s -v tests/dfx/perf/scripts/run_diffusion_benchmark.py -m A3 --test-config-file tests/dfx/perf/tests/test_hunyuan_image_tp2_cfgp2.json
             EXIT=$$?
             buildkite-agent artifact upload "tests/dfx/perf/results/diffusion_result_*.json"
             buildkite-agent artifact upload "tests/dfx/perf/results/logs/*.log"
@@ -145,7 +145,7 @@ steps:
           - export DIFFUSION_BENCHMARK_DIR=tests/dfx/perf/results
           - |
             set +e
-            pytest -s -v tests/dfx/perf/scripts/run_diffusion_benchmark.py -m npu --test-config-file tests/dfx/perf/tests/test_hunyuan_image_tp2_sp2.json
+            pytest -s -v tests/dfx/perf/scripts/run_diffusion_benchmark.py -m A3 --test-config-file tests/dfx/perf/tests/test_hunyuan_image_tp2_sp2.json
             EXIT=$$?
             buildkite-agent artifact upload "tests/dfx/perf/results/diffusion_result_*.json"
             buildkite-agent artifact upload "tests/dfx/perf/results/logs/*.log"
@@ -160,7 +160,7 @@ steps:
           - export DIFFUSION_BENCHMARK_DIR=tests/dfx/perf/results
           - |
             set +e
-            pytest -s -v tests/dfx/perf/scripts/run_diffusion_benchmark.py -m npu --test-config-file tests/dfx/perf/tests/test_hunyuan_image_tp4.json
+            pytest -s -v tests/dfx/perf/scripts/run_diffusion_benchmark.py -m A3 --test-config-file tests/dfx/perf/tests/test_hunyuan_image_tp4.json
             EXIT=$$?
             buildkite-agent artifact upload "tests/dfx/perf/results/diffusion_result_*.json"
             buildkite-agent artifact upload "tests/dfx/perf/results/logs/*.log"
@@ -175,7 +175,7 @@ steps:
           - export DIFFUSION_BENCHMARK_DIR=tests/dfx/perf/results
           - |
             set +e
-            pytest -s -v tests/dfx/perf/scripts/run_diffusion_benchmark.py -m npu --test-config-file tests/dfx/perf/tests/test_hunyuan_image3_it2i.json
+            pytest -s -v tests/dfx/perf/scripts/run_diffusion_benchmark.py -m A3 --test-config-file tests/dfx/perf/tests/test_hunyuan_image3_it2i.json
             EXIT=$$?
             buildkite-agent artifact upload "tests/dfx/perf/results/diffusion_result_*.json"
             buildkite-agent artifact upload "tests/dfx/perf/results/logs/*.log"
