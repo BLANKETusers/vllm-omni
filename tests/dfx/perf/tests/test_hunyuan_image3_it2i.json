@@ -8,7 +8,10 @@
             "cuda": "H100",
             "npu": "A3"
           },
-          "num_cards": 4
+          "num_cards": {
+            "cuda": 4,
+            "npu": 8
+          }
         }
       },
       "diffusion",
@@ -105,7 +108,43 @@
                 "window_size": -1,
                 "max_inflight": 1
               }
-            ]
+            ],
+            "platforms": {
+              "npu": {
+                "stages": [
+                  {
+                    "stage_id": 0,
+                    "gpu_memory_utilization": 0.65,
+                    "devices": "0,1,2,3",
+                    "tensor_parallel_size": 4,
+                    "moe_backend": "auto",
+                    "max_num_batched_tokens": 32768,
+                    "enforce_eager": true,
+                    "enable_prefix_caching": false,
+                    "parallel_config": {
+                      "tensor_parallel_size": 4,
+                      "enable_expert_parallel": true
+                    }
+                  },
+                  {
+                    "stage_id": 1,
+                    "gpu_memory_utilization": 0.65,
+                    "devices": "4,5,6,7",
+                    "enforce_eager": true,
+                    "parallel_config": {
+                      "tensor_parallel_size": 4,
+                      "vae_patch_parallel_size": 4,
+                      "enable_expert_parallel": true
+                    },
+                    "vae_use_tiling": true,
+                    "moe_backend": "auto"
+                  }
+                ],
+                "connectors": {
+                  "rdma_connector": null
+                }
+              }
+            }
           }
         },
         "enable-diffusion-pipeline-profiler": true
