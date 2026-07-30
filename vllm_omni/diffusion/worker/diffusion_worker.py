@@ -1067,15 +1067,6 @@ class WorkerProc:
         """Worker initialization and execution loops."""
         from vllm_omni.plugins import load_omni_general_plugins
 
-        # NPU runtime is not inherited by spawned subprocesses; initialise the
-        # device early so that platform detection (torch.npu.is_available())
-        # resolves correctly when current_omni_platform is first accessed.
-        if os.environ.get("ASCEND_RT_VISIBLE_DEVICES"):
-            import torch
-
-            if hasattr(torch, "npu"):
-                torch.npu.set_device(rank)
-
         shutdown_triggered = False
 
         def signal_handler(signum: int, frame) -> None:

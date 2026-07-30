@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import logging
+import os
 import traceback
 from itertools import chain
 from typing import TYPE_CHECKING
@@ -72,6 +73,14 @@ def npu_omni_platform_plugin() -> str | None:
         if hasattr(torch, "npu") and torch.npu.is_available():
             is_npu = True
             logger.debug("Confirmed NPU OmniPlatform is available.")
+        elif os.environ.get("ASCEND_RT_VISIBLE_DEVICES"):
+            # In spawned subprocesses, torch.npu.is_available() may return
+            # False before the NPU runtime is initialized. Fall back to the
+            # Ascend environment variable as a reliable indicator.
+            is_npu = True
+            logger.debug(
+                "NPU OmniPlatform detected via ASCEND_RT_VISIBLE_DEVICES (torch.npu.is_available() returned False)."
+            )
     except Exception as e:
         logger.debug("NPU OmniPlatform is not available because: %s", str(e))
 
