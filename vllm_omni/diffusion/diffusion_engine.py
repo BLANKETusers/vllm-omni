@@ -56,7 +56,7 @@ if TYPE_CHECKING:
 
 logger = init_logger(__name__)
 
-_ASYNC_OUTPUT_TIMEOUT = float(os.environ.get("DIFFUSION_ASYNC_OUTPUT_TIMEOUT", "30"))  # seconds
+_ASYNC_OUTPUT_TIMEOUT = float(os.environ.get("DIFFUSION_ASYNC_OUTPUT_TIMEOUT", "120"))  # seconds
 
 __all__ = [
     "DiffusionEngine",

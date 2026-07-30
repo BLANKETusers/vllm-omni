@@ -8,10 +8,7 @@
             "cuda": "H100",
             "npu": "A3"
           },
-          "num_cards": {
-            "cuda": 4,
-            "npu": 8
-          }
+          "num_cards": 4
         }
       },
       "diffusion",
@@ -31,16 +28,9 @@
             "async_chunk": false,
             "trust_remote_code": true,
             "connectors": {
-              "rdma_connector": {
-                "name": "MooncakeTransferEngineConnector",
-                "extra": {
-                  "host": "auto",
-                  "zmq_port": 50051,
-                  "protocol": "rdma",
-                  "device_name": "",
-                  "memory_pool_size": 17179869184,
-                  "memory_pool_device": "cpu"
-                }
+              "shared_mem_connector": {
+                "name": "SharedMemoryConnector",
+                "extra": {}
               }
             },
             "stages": [
@@ -70,7 +60,7 @@
                   "need_send_cache": true
                 },
                 "output_connectors": {
-                  "to_stage_1": "rdma_connector"
+                  "to_stage_1": "shared_mem_connector"
                 },
                 "default_sampling_params": {
                   "temperature": 0.0,
@@ -100,7 +90,7 @@
                 },
                 "vae_use_tiling": true,
                 "input_connectors": {
-                  "from_stage_0": "rdma_connector"
+                  "from_stage_0": "shared_mem_connector"
                 },
                 "default_sampling_params": {
                   "num_inference_steps": 50,
@@ -115,55 +105,7 @@
                 "window_size": -1,
                 "max_inflight": 1
               }
-            ],
-            "platforms": {
-              "npu": {
-                "stages": [
-                  {
-                    "stage_id": 0,
-                    "gpu_memory_utilization": 0.65,
-                    "devices": "0,1,2,3",
-                    "tensor_parallel_size": 4,
-                    "moe_backend": "auto",
-                    "max_num_batched_tokens": 32768,
-                    "enforce_eager": true,
-                    "enable_prefix_caching": false,
-                    "parallel_config": {
-                      "tensor_parallel_size": 4,
-                      "enable_expert_parallel": true
-                    },
-                    "output_connectors": {
-                      "to_stage_1": {
-                        "name": "SharedMemoryConnector",
-                        "extra": {}
-                      }
-                    }
-                  },
-                  {
-                    "stage_id": 1,
-                    "gpu_memory_utilization": 0.65,
-                    "devices": "4,5,6,7",
-                    "enforce_eager": true,
-                    "parallel_config": {
-                      "tensor_parallel_size": 4,
-                      "vae_patch_parallel_size": 4,
-                      "enable_expert_parallel": true
-                    },
-                    "vae_use_tiling": true,
-                    "moe_backend": "auto",
-                    "input_connectors": {
-                      "from_stage_0": {
-                        "name": "SharedMemoryConnector",
-                        "extra": {}
-                      }
-                    }
-                  }
-                ],
-                "connectors": {
-                  "rdma_connector": null
-                }
-              }
-            }
+            ]
           }
         },
         "enable-diffusion-pipeline-profiler": true
