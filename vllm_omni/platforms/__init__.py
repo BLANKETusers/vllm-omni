@@ -78,8 +78,9 @@ def npu_omni_platform_plugin() -> str | None:
             # False before the NPU runtime is initialized. Fall back to the
             # Ascend environment variable as a reliable indicator.
             is_npu = True
-            logger.debug(
-                "NPU OmniPlatform detected via ASCEND_RT_VISIBLE_DEVICES (torch.npu.is_available() returned False)."
+            logger.warning(
+                "NPU OmniPlatform detected via ASCEND_RT_VISIBLE_DEVICES=%s (torch.npu.is_available() returned False).",
+                os.environ["ASCEND_RT_VISIBLE_DEVICES"],
             )
     except Exception as e:
         logger.debug("NPU OmniPlatform is not available because: %s", str(e))
