@@ -6,7 +6,6 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import inspect
-import os
 import queue
 import threading
 import time
@@ -56,7 +55,7 @@ if TYPE_CHECKING:
 
 logger = init_logger(__name__)
 
-_ASYNC_OUTPUT_TIMEOUT = float(os.environ.get("DIFFUSION_ASYNC_OUTPUT_TIMEOUT", "120"))  # seconds
+_ASYNC_OUTPUT_TIMEOUT = 30.0  # seconds
 
 __all__ = [
     "DiffusionEngine",
