@@ -45,6 +45,19 @@ SEED = 42
 SSIM_THRESHOLD = 0.94
 PSNR_THRESHOLD = 28.0
 
+
+def _accelerator_available() -> bool:
+    """Check if a suitable accelerator (CUDA or NPU) is available."""
+    if torch.cuda.is_available():
+        return True
+    try:
+        if torch.npu.is_available():  # type: ignore[attr-defined]
+            return True
+    except (AttributeError, RuntimeError):
+        pass
+    return False
+
+
 REPO_ROOT = Path(__file__).resolve().parents[4]
 WORKSPACE_ROOT = REPO_ROOT.parent
 RUNNER_PATH = REPO_ROOT / "examples" / "offline_inference" / "image_to_video" / "image_to_video.py"
@@ -180,12 +193,12 @@ def _generate_online_video(
 
 
 @pytest.mark.benchmark
-@hardware_test(res={"cuda": "H100"}, num_cards=1)
+@hardware_test(res={"cuda": "H100", "npu": "A3"}, num_cards=1)
 def test_hunyuanvideo15_i2v_diffusers_offline_generates_video(
     hunyuanvideo15_i2v_image_source: str | None,
 ) -> None:
-    if not torch.cuda.is_available():
-        pytest.skip("HunyuanVideo-1.5 I2V offline accuracy test requires CUDA.")
+    if not _accelerator_available():
+        pytest.skip("HunyuanVideo-1.5 I2V offline accuracy test requires CUDA or NPU.")
 
     probe_binary("ffprobe")
     if not RUNNER_PATH.exists():
@@ -200,7 +213,7 @@ def test_hunyuanvideo15_i2v_diffusers_offline_generates_video(
 
 
 @pytest.mark.benchmark
-@hardware_test(res={"cuda": "H100"}, num_cards=1)
+@hardware_test(res={"cuda": "H100", "npu": "A3"}, num_cards=1)
 @pytest.mark.parametrize("omni_server", SERVER_CASES, indirect=True)
 def test_hunyuanvideo15_i2v_online_serving_generates_video(
     omni_server,
@@ -208,8 +221,8 @@ def test_hunyuanvideo15_i2v_online_serving_generates_video(
     hunyuanvideo15_i2v_image_source: str | None,
     hunyuanvideo15_online_timeout_seconds: int,
 ) -> None:
-    if not torch.cuda.is_available():
-        pytest.skip("HunyuanVideo-1.5 I2V online accuracy test requires CUDA.")
+    if not _accelerator_available():
+        pytest.skip("HunyuanVideo-1.5 I2V online accuracy test requires CUDA or NPU.")
 
     probe_binary("ffprobe")
     image_source = _resolve_image_source(hunyuanvideo15_i2v_image_source)
@@ -226,12 +239,12 @@ def test_hunyuanvideo15_i2v_online_serving_generates_video(
 
 
 @pytest.mark.benchmark
-@hardware_test(res={"cuda": "H100"}, num_cards=1)
+@hardware_test(res={"cuda": "H100", "npu": "A3"}, num_cards=1)
 def test_hunyuanvideo15_i2v_serving_matches_offline_video_similarity(
     hunyuanvideo15_i2v_image_source: str | None,
 ) -> None:
-    if not torch.cuda.is_available():
-        pytest.skip("HunyuanVideo-1.5 I2V video similarity test requires CUDA.")
+    if not _accelerator_available():
+        pytest.skip("HunyuanVideo-1.5 I2V video similarity test requires CUDA or NPU.")
 
     probe_binary("ffmpeg")
     probe_binary("ffprobe")
