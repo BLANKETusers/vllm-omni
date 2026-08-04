@@ -18,31 +18,8 @@ import torch
 from vllm_omni.platforms import current_omni_platform
 
 
-def _get_visible_devices_env_var() -> str | None:
-    """Return the platform-appropriate visible-devices environment variable."""
-    if current_omni_platform.is_npu():
-        return os.environ.get("ASCEND_RT_VISIBLE_DEVICES")
-    if current_omni_platform.is_rocm():
-        # ROCm uses both; HIP_VISIBLE_DEVICES takes precedence on some setups,
-        # but CUDA_VISIBLE_DEVICES is the standard mapping target.
-        return os.environ.get("HIP_VISIBLE_DEVICES") or os.environ.get("CUDA_VISIBLE_DEVICES")
-    # Default: CUDA
-    return os.environ.get("CUDA_VISIBLE_DEVICES")
-
-
 def get_physical_device_indices(devices):
-    """Map logical device indices to physical device indices.
-
-    On CUDA, system-level APIs (NVML) use physical indices, so the mapping
-    from ``CUDA_VISIBLE_DEVICES`` is necessary.  On NPU, ``torch.npu`` APIs
-    already operate in the logical namespace created by
-    ``ASCEND_RT_VISIBLE_DEVICES``, so no translation is needed.
-    """
-    if current_omni_platform.is_npu():
-        # torch.npu.mem_get_info / torch.npu.set_device use logical indices
-        # that already respect ASCEND_RT_VISIBLE_DEVICES.
-        return devices
-    visible_devices = _get_visible_devices_env_var()
+    visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
     if visible_devices is None:
         return devices
     visible_indices = [int(x) for x in visible_devices.split(",")]
