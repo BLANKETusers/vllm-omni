@@ -18,8 +18,20 @@ import torch
 from vllm_omni.platforms import current_omni_platform
 
 
+def _get_visible_devices_env_var() -> str | None:
+    """Return the platform-appropriate visible-devices environment variable."""
+    if current_omni_platform.is_npu():
+        return os.environ.get("ASCEND_RT_VISIBLE_DEVICES")
+    if current_omni_platform.is_rocm():
+        # ROCm uses both; HIP_VISIBLE_DEVICES takes precedence on some setups,
+        # but CUDA_VISIBLE_DEVICES is the standard mapping target.
+        return os.environ.get("HIP_VISIBLE_DEVICES") or os.environ.get("CUDA_VISIBLE_DEVICES")
+    # Default: CUDA
+    return os.environ.get("CUDA_VISIBLE_DEVICES")
+
+
 def get_physical_device_indices(devices):
-    visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
+    visible_devices = _get_visible_devices_env_var()
     if visible_devices is None:
         return devices
     visible_indices = [int(x) for x in visible_devices.split(",")]
