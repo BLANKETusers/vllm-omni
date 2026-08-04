@@ -755,6 +755,10 @@ def build_engine_args_dict(
     cli_tokenizer: str | None = None,
 ) -> dict[str, Any]:
     """Build the normalized engine args dict for one stage."""
+    from vllm.logger import init_logger
+
+    logger = init_logger(__name__)
+
     engine_args = stage_config.engine_args
     # HACK (Alex) Tensor parallel size should not be passed as None;
     # remove it if this is the case so that we fall back to default
@@ -766,7 +770,17 @@ def build_engine_args_dict(
     stage_type = _get_attr_or_item(stage_config, "stage_type", "llm")
     stage_id = stage_config.stage_id
 
+    logger.info(
+        f"[build_engine_args_dict] stage_id={stage_id}, "
+        f"parallel_config in engine_args: {'parallel_config' in engine_args}, "
+        f"parallel_config value: {engine_args.get('parallel_config', 'NOT FOUND')}"
+    )
     engine_args_dict = _to_dict(engine_args)
+    logger.info(
+        f"[build_engine_args_dict] After _to_dict, "
+        f"parallel_config in dict: {'parallel_config' in engine_args_dict}, "
+        f"parallel_config value: {engine_args_dict.get('parallel_config', 'NOT FOUND')}"
+    )
     pipeline_model_root = model
     model = engine_args_dict.pop("model", None) or model
     stage_defines_tokenizer = (
