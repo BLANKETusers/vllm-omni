@@ -267,7 +267,14 @@ def _to_dict(x: Any) -> dict[str, Any]:
     try:
         if isinstance(x, dict):
             return dict(x)
-        return _omega_to_dict(x)
+        result = _omega_to_dict(x)
+        # Log parallel_config conversion
+        if isinstance(result, dict) and "parallel_config" in result:
+            logger.info(
+                f"[_to_dict] parallel_config after conversion: type={type(result['parallel_config'])}, "
+                f"value={result['parallel_config']}"
+            )
+        return result
     except Exception:
         try:
             return dict(x)
