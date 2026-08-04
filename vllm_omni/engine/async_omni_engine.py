@@ -952,6 +952,12 @@ class AsyncOmniEngine:
         parallel_config = normalized_kwargs.get("parallel_config")
         if isinstance(parallel_config, dict):
             parallel_config = DiffusionParallelConfig.from_dict(parallel_config)
+            logger.info(
+                f"Loaded DiffusionParallelConfig from dict: "
+                f"tensor_parallel_size={parallel_config.tensor_parallel_size}, "
+                f"vae_patch_parallel_size={parallel_config.vae_patch_parallel_size}, "
+                f"world_size={parallel_config.world_size}"
+            )
         if parallel_config is None:
             ulysses_degree = normalized_kwargs.get("ulysses_degree") or 1
             ring_degree = normalized_kwargs.get("ring_degree") or 1
