@@ -944,9 +944,18 @@ class OmniDiffusionConfig:
 
         # Convert parallel_config dict/DictConfig to DiffusionParallelConfig
         # Use Mapping to handle both plain dicts and OmegaConf DictConfig
+        logger.info(
+            f"[OmniDiffusionConfig] parallel_config type: {type(self.parallel_config)}, "
+            f"is Mapping: {isinstance(self.parallel_config, Mapping)}, "
+            f"is DiffusionParallelConfig: {isinstance(self.parallel_config, DiffusionParallelConfig)}"
+        )
         if isinstance(self.parallel_config, Mapping):
             self.parallel_config = DiffusionParallelConfig.from_dict(dict(self.parallel_config))
         elif not isinstance(self.parallel_config, DiffusionParallelConfig):
+            logger.warning(
+                f"[OmniDiffusionConfig] parallel_config is {type(self.parallel_config)}, "
+                f"not DiffusionParallelConfig or Mapping, replacing with default!"
+            )
             self.parallel_config = DiffusionParallelConfig()
 
         if self.num_gpus is None:
