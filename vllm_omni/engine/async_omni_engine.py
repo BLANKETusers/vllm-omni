@@ -1039,9 +1039,19 @@ class AsyncOmniEngine:
                 attention_backend=kwargs.get("diffusion_attention_backend"),
             )
 
+        # Serialize parallel_config to dict for OmegaConf
+        parallel_config_dict = None
+        if parallel_config is not None:
+            if dataclasses.is_dataclass(parallel_config) and not isinstance(parallel_config, type):
+                parallel_config_dict = asdict(parallel_config)
+            elif hasattr(parallel_config, "__dict__"):
+                parallel_config_dict = dict(vars(parallel_config))
+            else:
+                parallel_config_dict = parallel_config
+
         stage_engine_args = {
             "max_num_seqs": kwargs.get("max_num_seqs") or 1,
-            "parallel_config": parallel_config,
+            "parallel_config": parallel_config_dict,
             "model_class_name": kwargs.get("model_class_name", None),
             "model_config": kwargs.get("model_config", None),
             "additional_config": kwargs.get("additional_config", None),
