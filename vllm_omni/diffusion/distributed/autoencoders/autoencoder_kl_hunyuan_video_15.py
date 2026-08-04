@@ -20,7 +20,13 @@ logger = init_logger(__name__)
 class DistributedAutoencoderKLHunyuanVideo15(AutoencoderKLHunyuanVideo15, DistributedVaeMixin):
     @classmethod
     def from_pretrained(cls, *args: Any, **kwargs: Any):
-        model = super().from_pretrained(*args, **kwargs)
+        # Load the base model first
+        # ruff: noqa: UP008
+        base_model = super(DistributedAutoencoderKLHunyuanVideo15, cls).from_pretrained(*args, **kwargs)
+        # Convert to our distributed class by copying state
+        model = cls.__new__(cls)
+        model.__dict__.update(base_model.__dict__)
+        # Initialize distributed executor
         model.init_distributed()
         return model
 
