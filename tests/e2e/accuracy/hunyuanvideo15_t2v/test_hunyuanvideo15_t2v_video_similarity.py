@@ -59,6 +59,10 @@ SERVER_CASES = [
             server_args=[
                 "--flow-shift",
                 str(FLOW_SHIFT),
+                "--tensor-parallel-size",
+                "2",
+                "--vae-patch-parallel-size",
+                "2",
             ],
             env_dict={"VLLM_OMNI_STORAGE_PATH": str(RESULT_ROOT / "storage")},
             use_omni=True,
@@ -111,6 +115,10 @@ def _build_offline_command(*, output_path: Path) -> list[str]:
         str(FPS),
         "--seed",
         str(SEED),
+        "--tensor-parallel-size",
+        "2",
+        "--vae-patch-parallel-size",
+        "2",
         "--output",
         str(output_path),
     ]
@@ -154,7 +162,7 @@ def _generate_online_video(*, omni_server, openai_client, timeout_seconds: int) 
 
 
 @pytest.mark.benchmark
-@hardware_test(res={"cuda": "H100", "npu": "A3"}, num_cards=1)
+@hardware_test(res={"cuda": "H100", "npu": "A3"}, num_cards={"cuda": 1, "npu": 2})
 def test_hunyuanvideo15_t2v_diffusers_offline_generates_video() -> None:
     if not _accelerator_available():
         pytest.skip("HunyuanVideo-1.5 T2V offline accuracy test requires CUDA or NPU.")
@@ -170,7 +178,7 @@ def test_hunyuanvideo15_t2v_diffusers_offline_generates_video() -> None:
 
 
 @pytest.mark.benchmark
-@hardware_test(res={"cuda": "H100", "npu": "A3"}, num_cards=1)
+@hardware_test(res={"cuda": "H100", "npu": "A3"}, num_cards={"cuda": 1, "npu": 2})
 @pytest.mark.parametrize("omni_server", SERVER_CASES, indirect=True)
 def test_hunyuanvideo15_t2v_online_serving_generates_video(
     omni_server,
@@ -192,7 +200,7 @@ def test_hunyuanvideo15_t2v_online_serving_generates_video(
 
 
 @pytest.mark.benchmark
-@hardware_test(res={"cuda": "H100", "npu": "A3"}, num_cards=1)
+@hardware_test(res={"cuda": "H100", "npu": "A3"}, num_cards={"cuda": 1, "npu": 2})
 def test_hunyuanvideo15_t2v_serving_matches_offline_video_similarity() -> None:
     if not _accelerator_available():
         pytest.skip("HunyuanVideo-1.5 T2V video similarity test requires CUDA or NPU.")
