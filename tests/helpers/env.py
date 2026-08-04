@@ -31,6 +31,17 @@ def _get_visible_devices_env_var() -> str | None:
 
 
 def get_physical_device_indices(devices):
+    """Map logical device indices to physical device indices.
+
+    On CUDA, system-level APIs (NVML) use physical indices, so the mapping
+    from ``CUDA_VISIBLE_DEVICES`` is necessary.  On NPU, ``torch.npu`` APIs
+    already operate in the logical namespace created by
+    ``ASCEND_RT_VISIBLE_DEVICES``, so no translation is needed.
+    """
+    if current_omni_platform.is_npu():
+        # torch.npu.mem_get_info / torch.npu.set_device use logical indices
+        # that already respect ASCEND_RT_VISIBLE_DEVICES.
+        return devices
     visible_devices = _get_visible_devices_env_var()
     if visible_devices is None:
         return devices
