@@ -164,3 +164,19 @@ class DistributedAutoencoderKLHunyuanVideo15(AutoencoderKLHunyuanVideo15, Distri
             DistributedOperator(split=self.tile_split, exec=self.tile_exec, merge=self.tile_merge),
             broadcast_result=True,
         )
+
+    def decode(self, z: torch.Tensor, return_dict: bool = True) -> Any:
+        """Override decode to force distributed tiled decode when enabled."""
+        if not self.is_distributed_enabled():
+            return super().decode(z, return_dict=return_dict)
+
+        # Force tiled decode when distributed is enabled
+        logger.info("Using distributed tiled decode for VAE")
+        decoded = self.tiled_decode(z)
+
+        if not return_dict:
+            return (decoded,)
+
+        from diffusers.models.autoencoders.vae import DecoderOutput
+
+        return DecoderOutput(sample=decoded)
