@@ -45,9 +45,26 @@ class DistributedVaeExecutor:
     """
 
     def __init__(self):
-        self.group = get_dit_group()
-        self.world_size = dist.get_world_size(self.group)
-        self.rank = dist.get_rank(self.group)
+        # Check if distributed is initialized before getting DIT group
+        if dist.is_initialized():
+            try:
+                self.group = get_dit_group()
+                self.world_size = dist.get_world_size(self.group)
+                self.rank = dist.get_rank(self.group)
+                logger.info(
+                    f"DistributedVaeExecutor initialized: group={self.group}, "
+                    f"world_size={self.world_size}, rank={self.rank}"
+                )
+            except (AssertionError, RuntimeError) as e:
+                logger.warning(f"Failed to get DIT group: {e}. Distributed VAE will be disabled.")
+                self.group = None
+                self.world_size = 1
+                self.rank = 0
+        else:
+            logger.warning("torch.distributed not initialized. Distributed VAE will be disabled.")
+            self.group = None
+            self.world_size = 1
+            self.rank = 0
         self.parallel_size = 1
         self.parallel_mode = "tile"
 
@@ -180,6 +197,7 @@ class DistributedVaeMixin:
             self.distributed_executor.parallel_size <= 1
             or not dist.is_initialized()
             or not getattr(self, "use_tiling", False)
+            or self.distributed_executor.group is None
         ):
             return False
         world_size = dist.get_world_size(group=self.distributed_executor.group)
