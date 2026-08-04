@@ -991,6 +991,11 @@ class AsyncOmniEngine:
                 hsdp_shard_size=hsdp_shard_size,
                 hsdp_replicate_size=hsdp_replicate_size,
             )
+            logger.info(
+                f"Created DiffusionParallelConfig: tensor_parallel_size={parallel_config.tensor_parallel_size}, "
+                f"vae_patch_parallel_size={parallel_config.vae_patch_parallel_size}, "
+                f"world_size={parallel_config.world_size}"
+            )
 
         num_devices = max(1, int(parallel_config.world_size))
         devices = ",".join(str(i) for i in range(num_devices))
