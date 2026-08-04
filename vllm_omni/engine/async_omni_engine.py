@@ -11,6 +11,7 @@ import asyncio
 import concurrent.futures
 import dataclasses
 import json
+import os
 import queue
 import threading
 import time
@@ -1004,7 +1005,24 @@ class AsyncOmniEngine:
             )
 
         num_devices = max(1, int(parallel_config.world_size))
-        devices = ",".join(str(i) for i in range(num_devices))
+        # Use actual device IDs from environment if available
+        visible_devices_env = os.environ.get("ASCEND_RT_VISIBLE_DEVICES") or os.environ.get("CUDA_VISIBLE_DEVICES")
+        if visible_devices_env and num_devices > 1:
+            # Parse comma-separated device IDs
+            available_device_ids = [d.strip() for d in visible_devices_env.split(",") if d.strip()]
+            if len(available_device_ids) >= num_devices:
+                devices = ",".join(available_device_ids[:num_devices])
+                logger.info(
+                    f"Using devices from environment: {devices} (from {visible_devices_env}, world_size={num_devices})"
+                )
+            else:
+                logger.warning(
+                    f"Environment specifies {len(available_device_ids)} devices ({visible_devices_env}) "
+                    f"but world_size={num_devices}. Falling back to 0-indexed devices."
+                )
+                devices = ",".join(str(i) for i in range(num_devices))
+        else:
+            devices = ",".join(str(i) for i in range(num_devices))
         model_class_name = kwargs.get("model_class_name", None)
         final_output_type = "audio" if model_class_name and supports_audio_output(model_class_name) else "image"
 
