@@ -1305,12 +1305,23 @@ class OmniDiffusionConfig:
 
     @classmethod
     def from_kwargs(cls, **kwargs: Any) -> "OmniDiffusionConfig":
+        from vllm.logger import init_logger
+
+        logger = init_logger(__name__)
+        logger.info(
+            f"[OmniDiffusionConfig.from_kwargs] parallel_config in kwargs: {'parallel_config' in kwargs}, "
+            f"type: {type(kwargs.get('parallel_config', None))}, "
+            f"value: {kwargs.get('parallel_config', 'NOT FOUND')}"
+        )
         kwargs = normalize_omni_diffusion_kwargs(kwargs)
 
         # Filter kwargs to only include valid fields
         valid_fields = {f.name for f in fields(cls)}
         filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_fields}
-
+        logger.info(
+            f"[OmniDiffusionConfig.from_kwargs] After filtering, parallel_config in filtered_kwargs: "
+            f"{'parallel_config' in filtered_kwargs}"
+        )
         instance = cls(**filtered_kwargs)
         return instance
 
