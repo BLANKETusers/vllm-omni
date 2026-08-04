@@ -1004,9 +1004,12 @@ class AsyncOmniEngine:
                 f"world_size={parallel_config.world_size}"
             )
 
+        logger.info(f"About to compute num_devices from parallel_config.world_size={parallel_config.world_size}")
         num_devices = max(1, int(parallel_config.world_size))
+        logger.info(f"Computed num_devices={num_devices}")
         # Use actual device IDs from environment if available
         visible_devices_env = os.environ.get("ASCEND_RT_VISIBLE_DEVICES") or os.environ.get("CUDA_VISIBLE_DEVICES")
+        logger.info(f"visible_devices_env={visible_devices_env}")
         if visible_devices_env and num_devices > 1:
             # Parse comma-separated device IDs
             available_device_ids = [d.strip() for d in visible_devices_env.split(",") if d.strip()]
