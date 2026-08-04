@@ -24,6 +24,16 @@ class DistributedAutoencoderKLHunyuanVideo15(AutoencoderKLHunyuanVideo15, Distri
         model.init_distributed()
         return model
 
+    @property
+    def use_tiling(self) -> bool:
+        """Compatibility property for vLLM's distributed VAE executor."""
+        return getattr(self, "_use_tiling", False)
+
+    @use_tiling.setter
+    def use_tiling(self, value: bool) -> None:
+        """Compatibility property for vLLM's distributed VAE executor."""
+        self._use_tiling = value
+
     def tile_split(self, z: torch.Tensor) -> tuple[list[TileTask], GridSpec]:
         _, _, _, height, width = z.shape
         overlap_height = int(self.tile_latent_min_height * (1 - self.tile_overlap_factor))
