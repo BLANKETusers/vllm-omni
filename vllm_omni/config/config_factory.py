@@ -548,25 +548,42 @@ class StageConfigFactory:
             List containing a single config dict for the diffusion stage.
         """
         # Calculate devices based on parallel config
+        from vllm.logger import init_logger
+
+        logger = init_logger(__name__)
         devices = "0"
         if "parallel_config" in kwargs:
             num_devices = kwargs["parallel_config"].world_size
+            logger.info(
+                f"[create_default_diffusion] parallel_config.world_size={num_devices}, "
+                f"tensor_parallel_size={kwargs['parallel_config'].tensor_parallel_size}, "
+                f"vae_patch_parallel_size={kwargs['parallel_config'].vae_patch_parallel_size}"
+            )
             # Use actual device IDs from environment if available
             import os
 
             visible_devices_env = os.environ.get("ASCEND_RT_VISIBLE_DEVICES") or os.environ.get("CUDA_VISIBLE_DEVICES")
+            logger.info(f"[create_default_diffusion] visible_devices_env={visible_devices_env}")
             if visible_devices_env and num_devices > 1:
                 # Parse comma-separated device IDs
                 available_device_ids = [d.strip() for d in visible_devices_env.split(",") if d.strip()]
                 if len(available_device_ids) >= num_devices:
                     devices = ",".join(available_device_ids[:num_devices])
+                    logger.info(f"[create_default_diffusion] Using devices from env: {devices}")
                 else:
                     # Fallback to 0-indexed
                     for i in range(1, num_devices):
                         devices += f",{i}"
+                    logger.warning(
+                        f"[create_default_diffusion] Env has {len(available_device_ids)} devices "
+                        f"but need {num_devices}, falling back to 0-indexed: {devices}"
+                    )
             else:
                 for i in range(1, num_devices):
                     devices += f",{i}"
+                logger.info(f"[create_default_diffusion] Using 0-indexed devices: {devices}")
+        else:
+            logger.warning("[create_default_diffusion] No parallel_config in kwargs")
 
         engine_args: dict[str, Any] = {}
         for key, value in kwargs.items():

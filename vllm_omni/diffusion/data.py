@@ -273,6 +273,10 @@ class DiffusionParallelConfig:
         return self
 
     def __post_init__(self) -> None:
+        from vllm.logger import init_logger
+
+        logger = init_logger(__name__)
+
         if self.sequence_parallel_size is None:
             self.sequence_parallel_size = (
                 self.allgather_degree if self.allgather_degree > 1 else self.ulysses_degree * self.ring_degree
@@ -285,6 +289,13 @@ class DiffusionParallelConfig:
             * self.tensor_parallel_size
             * self.sequence_parallel_size
             * self.cfg_parallel_size
+        )
+
+        logger.info(
+            f"[DiffusionParallelConfig.__post_init__] Calculating world_size: "
+            f"pipeline={self.pipeline_parallel_size}, data={self.data_parallel_size}, "
+            f"tensor={self.tensor_parallel_size}, sequence={self.sequence_parallel_size}, "
+            f"cfg={self.cfg_parallel_size} => world_size={other_parallel_world_size}"
         )
 
         # Handle HSDP configuration
@@ -941,8 +952,17 @@ class OmniDiffusionConfig:
         if self.num_gpus is None:
             if self.parallel_config is not None:
                 self.num_gpus = self.parallel_config.world_size
+                logger.info(f"[OmniDiffusionConfig] Setting num_gpus={self.num_gpus} from parallel_config.world_size")
             else:
                 self.num_gpus = 1
+                logger.info("[OmniDiffusionConfig] No parallel_config, setting num_gpus=1")
+        else:
+            logger.info(f"[OmniDiffusionConfig] num_gpus already set to {self.num_gpus}")
+
+        logger.info(
+            f"[OmniDiffusionConfig] Final: num_gpus={self.num_gpus}, "
+            f"parallel_config.world_size={self.parallel_config.world_size}"
+        )
 
         if self.num_gpus < self.parallel_config.world_size:
             raise ValueError(
