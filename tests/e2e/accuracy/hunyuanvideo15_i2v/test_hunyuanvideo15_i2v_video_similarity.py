@@ -71,6 +71,8 @@ SERVER_CASES = [
                 "--flow-shift",
                 str(FLOW_SHIFT),
                 "--enforce-eager",
+                "--tensor-parallel-size",
+                "2",
             ],
             env_dict={"VLLM_OMNI_STORAGE_PATH": str(RESULT_ROOT / "storage")},
             use_omni=True,
@@ -141,6 +143,8 @@ def _build_offline_command(*, image_source: str, output_path: Path) -> list[str]
         "--seed",
         str(SEED),
         "--enforce-eager",
+        "--tensor-parallel-size",
+        "2",
         "--output",
         str(output_path),
     ]
