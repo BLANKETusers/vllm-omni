@@ -4,6 +4,7 @@
 from typing import Any
 
 import torch
+import torch.distributed as dist
 from diffusers import AutoencoderKLHunyuanVideo15
 from vllm.logger import init_logger
 
@@ -167,7 +168,15 @@ class DistributedAutoencoderKLHunyuanVideo15(AutoencoderKLHunyuanVideo15, Distri
 
     def decode(self, z: torch.Tensor, return_dict: bool = True) -> Any:
         """Override decode to force distributed tiled decode when enabled."""
-        if not self.is_distributed_enabled():
+        is_enabled = self.is_distributed_enabled()
+        logger.info(f"VAE decode: is_distributed_enabled={is_enabled}")
+        if not is_enabled:
+            logger.info(
+                f"Distributed decode disabled: "
+                f"parallel_size={self.distributed_executor.parallel_size}, "
+                f"dist.is_initialized={dist.is_initialized()}, "
+                f"use_tiling={getattr(self, 'use_tiling', False)}"
+            )
             return super().decode(z, return_dict=return_dict)
 
         # Force tiled decode when distributed is enabled
