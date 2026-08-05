@@ -51,10 +51,6 @@ class DistributedVaeExecutor:
                 self.group = get_dit_group()
                 self.world_size = dist.get_world_size(self.group)
                 self.rank = dist.get_rank(self.group)
-                logger.info(
-                    f"DistributedVaeExecutor initialized: group={self.group}, "
-                    f"world_size={self.world_size}, rank={self.rank}"
-                )
             except (AssertionError, RuntimeError) as e:
                 logger.warning(f"Failed to get DIT group: {e}. Distributed VAE will be disabled.")
                 self.group = None

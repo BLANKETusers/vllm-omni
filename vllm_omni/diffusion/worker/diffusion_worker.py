@@ -255,7 +255,6 @@ class DiffusionWorker:
         if not skip_load_model:
             self.load_model(load_format=self.od_config.diffusion_load_format)
             self.init_lora_manager()
-        logger.info(f"Worker {self.rank}: Initialization complete.")
 
     def init_device(self) -> None:
         """Initialize the device and distributed environment."""
@@ -314,7 +313,6 @@ class DiffusionWorker:
             set_current_vllm_config(self.vllm_config),
         ):
             init_distributed_environment(world_size=world_size, rank=rank)
-            logger.info(f"Worker {self.rank}: Initialized device and distributed environment.")
 
             parallel_config = self.od_config.parallel_config
             initialize_model_parallel(
