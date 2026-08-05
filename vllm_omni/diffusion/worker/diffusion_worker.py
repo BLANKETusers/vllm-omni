@@ -262,12 +262,7 @@ class DiffusionWorker:
         world_size = self.od_config.num_gpus
         rank = self.rank
 
-        logger.info(
-            f"[Worker {rank}] init_device: num_gpus={world_size}, "
-            f"parallel_config.world_size={self.od_config.parallel_config.world_size}, "
-            f"parallel_config.tensor_parallel_size={self.od_config.parallel_config.tensor_parallel_size}, "
-            f"parallel_config.vae_patch_parallel_size={self.od_config.parallel_config.vae_patch_parallel_size}"
-        )
+        logger.info(f"[Worker {rank}] Initializing device with world_size={world_size}, rank={rank}")
 
         # Set environment variables for distributed initialization
         os.environ["MASTER_ADDR"] = "localhost"

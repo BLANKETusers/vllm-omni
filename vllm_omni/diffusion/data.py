@@ -273,10 +273,6 @@ class DiffusionParallelConfig:
         return self
 
     def __post_init__(self) -> None:
-        from vllm.logger import init_logger
-
-        logger = init_logger(__name__)
-
         if self.sequence_parallel_size is None:
             self.sequence_parallel_size = (
                 self.allgather_degree if self.allgather_degree > 1 else self.ulysses_degree * self.ring_degree
@@ -289,13 +285,6 @@ class DiffusionParallelConfig:
             * self.tensor_parallel_size
             * self.sequence_parallel_size
             * self.cfg_parallel_size
-        )
-
-        logger.info(
-            f"[DiffusionParallelConfig.__post_init__] Calculating world_size: "
-            f"pipeline={self.pipeline_parallel_size}, data={self.data_parallel_size}, "
-            f"tensor={self.tensor_parallel_size}, sequence={self.sequence_parallel_size}, "
-            f"cfg={self.cfg_parallel_size} => world_size={other_parallel_world_size}"
         )
 
         # Handle HSDP configuration
@@ -944,34 +933,20 @@ class OmniDiffusionConfig:
 
         # Convert parallel_config dict/DictConfig to DiffusionParallelConfig
         # Use Mapping to handle both plain dicts and OmegaConf DictConfig
-        logger.info(
-            f"[OmniDiffusionConfig] parallel_config type: {type(self.parallel_config)}, "
-            f"is Mapping: {isinstance(self.parallel_config, Mapping)}, "
-            f"is DiffusionParallelConfig: {isinstance(self.parallel_config, DiffusionParallelConfig)}"
-        )
         if isinstance(self.parallel_config, Mapping):
             self.parallel_config = DiffusionParallelConfig.from_dict(dict(self.parallel_config))
         elif not isinstance(self.parallel_config, DiffusionParallelConfig):
             logger.warning(
-                f"[OmniDiffusionConfig] parallel_config is {type(self.parallel_config)}, "
-                f"not DiffusionParallelConfig or Mapping, replacing with default!"
+                f"parallel_config is {type(self.parallel_config)}, "
+                "not DiffusionParallelConfig or Mapping, replacing with default"
             )
             self.parallel_config = DiffusionParallelConfig()
 
         if self.num_gpus is None:
             if self.parallel_config is not None:
                 self.num_gpus = self.parallel_config.world_size
-                logger.info(f"[OmniDiffusionConfig] Setting num_gpus={self.num_gpus} from parallel_config.world_size")
             else:
                 self.num_gpus = 1
-                logger.info("[OmniDiffusionConfig] No parallel_config, setting num_gpus=1")
-        else:
-            logger.info(f"[OmniDiffusionConfig] num_gpus already set to {self.num_gpus}")
-
-        logger.info(
-            f"[OmniDiffusionConfig] Final: num_gpus={self.num_gpus}, "
-            f"parallel_config.world_size={self.parallel_config.world_size}"
-        )
 
         if self.num_gpus < self.parallel_config.world_size:
             raise ValueError(
@@ -1305,23 +1280,12 @@ class OmniDiffusionConfig:
 
     @classmethod
     def from_kwargs(cls, **kwargs: Any) -> "OmniDiffusionConfig":
-        from vllm.logger import init_logger
-
-        logger = init_logger(__name__)
-        logger.info(
-            f"[OmniDiffusionConfig.from_kwargs] parallel_config in kwargs: {'parallel_config' in kwargs}, "
-            f"type: {type(kwargs.get('parallel_config', None))}, "
-            f"value: {kwargs.get('parallel_config', 'NOT FOUND')}"
-        )
         kwargs = normalize_omni_diffusion_kwargs(kwargs)
 
         # Filter kwargs to only include valid fields
         valid_fields = {f.name for f in fields(cls)}
         filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_fields}
-        logger.info(
-            f"[OmniDiffusionConfig.from_kwargs] After filtering, parallel_config in filtered_kwargs: "
-            f"{'parallel_config' in filtered_kwargs}"
-        )
+
         instance = cls(**filtered_kwargs)
         return instance
 

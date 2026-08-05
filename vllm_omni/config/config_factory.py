@@ -623,11 +623,6 @@ class StageConfigFactory:
             "final_output_type": "image",
         }
 
-        logger.info(
-            f"[create_default_diffusion] Created config_dict, "
-            f"parallel_config in engine_args: {'parallel_config' in engine_args}, "
-            f"parallel_config value: {engine_args.get('parallel_config', 'NOT FOUND')}"
-        )
         return [config_dict]
 
     @classmethod
