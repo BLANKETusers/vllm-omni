@@ -936,10 +936,6 @@ class OmniDiffusionConfig:
         if isinstance(self.parallel_config, Mapping):
             self.parallel_config = DiffusionParallelConfig.from_dict(dict(self.parallel_config))
         elif not isinstance(self.parallel_config, DiffusionParallelConfig):
-            logger.warning(
-                f"parallel_config is {type(self.parallel_config)}, "
-                "not DiffusionParallelConfig or Mapping, replacing with default"
-            )
             self.parallel_config = DiffusionParallelConfig()
 
         if self.num_gpus is None:

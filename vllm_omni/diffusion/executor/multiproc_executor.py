@@ -78,10 +78,6 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         self._rpc_wave_id: int = 0
 
         num_workers = cast(int, self.od_config.num_gpus)
-        logger.info(
-            f"[MultiprocessingDiffusionExecutor] Initializing with num_workers={num_workers} "
-            f"(from od_config.num_gpus), parallel_config.world_size={self.od_config.parallel_config.world_size}"
-        )
         self.wake_events = [mp.Event() for _ in range(num_workers)]
 
         self._broadcast_mq = self._init_broadcast_queue(num_workers)
