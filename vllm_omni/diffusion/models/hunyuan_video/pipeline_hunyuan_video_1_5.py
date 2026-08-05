@@ -139,10 +139,6 @@ class HunyuanVideo15Pipeline(
             local_files_only=local_files_only,
             torch_dtype=torch.float32,
         ).to(self.device)
-        logger.info(f"VAE type after loading: {type(self.vae).__name__}")
-        is_distributed = isinstance(self.vae, DistributedAutoencoderKLHunyuanVideo15)
-        logger.info(f"VAE is DistributedAutoencoderKLHunyuanVideo15: {is_distributed}")
-        logger.info(f"VAE has use_tiling: {hasattr(self.vae, 'use_tiling')}")
 
         self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
             model, subfolder="scheduler", local_files_only=local_files_only

@@ -375,12 +375,7 @@ def initialize_model(
 
         vae_pp_size = od_config.parallel_config.vae_patch_parallel_size
         is_distributed_vae = hasattr(model, "vae") and isinstance(model.vae, DistributedVaeMixin)
-        logger.info(
-            f"VAE parallel config: vae_pp_size={vae_pp_size}, "
-            f"is_distributed_vae={is_distributed_vae}, "
-            f"has_vae={hasattr(model, 'vae')}, "
-            f"vae_type={type(model.vae).__name__ if hasattr(model, 'vae') else 'N/A'}"
-        )
+
         if vae_pp_size > 1 and not is_distributed_vae:
             logger.warning(
                 "vae_patch_parallel_size=%d is set but VAE patch parallelism is NOT enabled for %s; ignoring.",
@@ -398,14 +393,10 @@ def initialize_model(
         if hasattr(model, "vae") and hasattr(model.vae, "use_slicing"):
             model.vae.use_slicing = od_config.vae_use_slicing
         if hasattr(model, "vae") and hasattr(model.vae, "use_tiling"):
-            logger.info(f"Setting VAE use_tiling to {od_config.vae_use_tiling}")
             model.vae.use_tiling = od_config.vae_use_tiling
-            logger.info(f"VAE use_tiling after setting: {model.vae.use_tiling}")
 
         if is_distributed_vae:
-            logger.info(f"Calling set_parallel_size({vae_pp_size}, mode={od_config.parallel_config.vae_parallel_mode})")
             model.vae.set_parallel_size(vae_pp_size, mode=od_config.parallel_config.vae_parallel_mode)
-            logger.info(f"VAE parallel_size after setting: {model.vae.distributed_executor.parallel_size}")
 
         # Apply sequence parallelism if enabled
         # This follows diffusers' pattern where enable_parallelism() is called
