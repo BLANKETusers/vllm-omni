@@ -6,12 +6,13 @@ import sys
 from pathlib import Path
 
 import pytest
-import torch
 
 from tests.e2e.accuracy.helpers import (
     assert_video_metadata,
     assert_video_similarity_metrics,
     build_online_image_reference,
+    is_accelerator_available,
+    is_npu_available,
     materialize_image_source,
     probe_binary,
     probe_video,
@@ -44,18 +45,6 @@ FLOW_SHIFT = 5.0
 SEED = 42
 SSIM_THRESHOLD = 0.94
 PSNR_THRESHOLD = 28.0
-
-
-def _accelerator_available() -> bool:
-    """Check if a suitable accelerator (CUDA or NPU) is available."""
-    if torch.cuda.is_available():
-        return True
-    try:
-        if torch.npu.is_available():  # type: ignore[attr-defined]
-            return True
-    except (AttributeError, RuntimeError):
-        pass
-    return False
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -144,20 +133,15 @@ def _build_offline_command(*, image_source: str, output_path: Path) -> list[str]
     ]
 
     # Add parallel args only on NPU (detected via torch_npu availability)
-    try:
-        import torch
-
-        if hasattr(torch, "npu") and torch.npu.is_available():  # type: ignore[attr-defined]
-            cmd.extend(
-                [
-                    "--tensor-parallel-size",
-                    "2",
-                    "--vae-patch-parallel-size",
-                    "2",
-                ]
-            )
-    except (ImportError, AttributeError, RuntimeError):
-        pass
+    if is_npu_available():
+        cmd.extend(
+            [
+                "--tensor-parallel-size",
+                "2",
+                "--vae-patch-parallel-size",
+                "2",
+            ]
+        )
 
     cmd.extend(["--output", str(output_path)])
     return cmd
@@ -214,7 +198,7 @@ def _generate_online_video(
 def test_hunyuanvideo15_i2v_diffusers_offline_generates_video(
     hunyuanvideo15_i2v_image_source: str | None,
 ) -> None:
-    if not _accelerator_available():
+    if not is_accelerator_available():
         pytest.skip("HunyuanVideo-1.5 I2V offline accuracy test requires CUDA or NPU.")
 
     probe_binary("ffprobe")
@@ -238,7 +222,7 @@ def test_hunyuanvideo15_i2v_online_serving_generates_video(
     hunyuanvideo15_i2v_image_source: str | None,
     hunyuanvideo15_online_timeout_seconds: int,
 ) -> None:
-    if not _accelerator_available():
+    if not is_accelerator_available():
         pytest.skip("HunyuanVideo-1.5 I2V online accuracy test requires CUDA or NPU.")
 
     probe_binary("ffprobe")
@@ -260,7 +244,7 @@ def test_hunyuanvideo15_i2v_online_serving_generates_video(
 def test_hunyuanvideo15_i2v_serving_matches_offline_video_similarity(
     hunyuanvideo15_i2v_image_source: str | None,
 ) -> None:
-    if not _accelerator_available():
+    if not is_accelerator_available():
         pytest.skip("HunyuanVideo-1.5 I2V video similarity test requires CUDA or NPU.")
 
     probe_binary("ffmpeg")

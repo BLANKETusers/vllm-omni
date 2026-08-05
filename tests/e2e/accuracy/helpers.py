@@ -27,6 +27,26 @@ from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMe
 FTFY_SITECUSTOMIZE_MOCK_DIR = Path(__file__).with_name("ftfy_mock")
 
 
+def is_accelerator_available() -> bool:
+    """Check if a suitable accelerator (CUDA or NPU) is available."""
+    if torch.cuda.is_available():
+        return True
+    try:
+        if torch.npu.is_available():  # type: ignore[attr-defined]
+            return True
+    except (AttributeError, RuntimeError):
+        pass
+    return False
+
+
+def is_npu_available() -> bool:
+    """Check if NPU (Ascend) is available."""
+    try:
+        return torch.npu.is_available()  # type: ignore[attr-defined]
+    except (AttributeError, RuntimeError):
+        return False
+
+
 class IdentityFtfy:
     @staticmethod
     def fix_text(text: str) -> str:

@@ -6,11 +6,12 @@ import sys
 from pathlib import Path
 
 import pytest
-import torch
 
 from tests.e2e.accuracy.helpers import (
     assert_video_metadata,
     assert_video_similarity_metrics,
+    is_accelerator_available,
+    is_npu_available,
     probe_binary,
     probe_video,
     send_video_request_with_timeout,
@@ -32,18 +33,6 @@ FLOW_SHIFT = 5.0
 SEED = 42
 SSIM_THRESHOLD = 0.94
 PSNR_THRESHOLD = 28.0
-
-
-def _accelerator_available() -> bool:
-    """Check if a suitable accelerator (CUDA or NPU) is available."""
-    if torch.cuda.is_available():
-        return True
-    try:
-        if torch.npu.is_available():  # type: ignore[attr-defined]
-            return True
-    except (AttributeError, RuntimeError):
-        pass
-    return False
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -114,20 +103,15 @@ def _build_offline_command(*, output_path: Path) -> list[str]:
     ]
 
     # Add parallel args only on NPU (detected via torch_npu availability)
-    try:
-        import torch
-
-        if hasattr(torch, "npu") and torch.npu.is_available():  # type: ignore[attr-defined]
-            cmd.extend(
-                [
-                    "--tensor-parallel-size",
-                    "2",
-                    "--vae-patch-parallel-size",
-                    "2",
-                ]
-            )
-    except (ImportError, AttributeError, RuntimeError):
-        pass
+    if is_npu_available():
+        cmd.extend(
+            [
+                "--tensor-parallel-size",
+                "2",
+                "--vae-patch-parallel-size",
+                "2",
+            ]
+        )
 
     cmd.extend(["--output", str(output_path)])
     return cmd
@@ -173,7 +157,7 @@ def _generate_online_video(*, omni_server, openai_client, timeout_seconds: int) 
 @pytest.mark.benchmark
 @hardware_test(res={"cuda": "H100", "npu": "A3"}, num_cards={"cuda": 1, "npu": 2})
 def test_hunyuanvideo15_t2v_diffusers_offline_generates_video() -> None:
-    if not _accelerator_available():
+    if not is_accelerator_available():
         pytest.skip("HunyuanVideo-1.5 T2V offline accuracy test requires CUDA or NPU.")
 
     probe_binary("ffprobe")
@@ -194,7 +178,7 @@ def test_hunyuanvideo15_t2v_online_serving_generates_video(
     openai_client,
     hunyuanvideo15_online_timeout_seconds: int,
 ) -> None:
-    if not _accelerator_available():
+    if not is_accelerator_available():
         pytest.skip("HunyuanVideo-1.5 T2V online accuracy test requires CUDA or NPU.")
 
     probe_binary("ffprobe")
@@ -211,7 +195,7 @@ def test_hunyuanvideo15_t2v_online_serving_generates_video(
 @pytest.mark.benchmark
 @hardware_test(res={"cuda": "H100", "npu": "A3"}, num_cards={"cuda": 1, "npu": 2})
 def test_hunyuanvideo15_t2v_serving_matches_offline_video_similarity() -> None:
-    if not _accelerator_available():
+    if not is_accelerator_available():
         pytest.skip("HunyuanVideo-1.5 T2V video similarity test requires CUDA or NPU.")
 
     probe_binary("ffmpeg")
