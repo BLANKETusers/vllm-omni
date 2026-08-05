@@ -59,10 +59,6 @@ SERVER_CASES = [
             server_args=[
                 "--flow-shift",
                 str(FLOW_SHIFT),
-                "--tensor-parallel-size",
-                "2",
-                "--vae-patch-parallel-size",
-                "2",
             ],
             env_dict={"VLLM_OMNI_STORAGE_PATH": str(RESULT_ROOT / "storage")},
             use_omni=True,
@@ -92,7 +88,7 @@ def _artifact_paths() -> tuple[Path, Path]:
 
 
 def _build_offline_command(*, output_path: Path) -> list[str]:
-    return [
+    cmd = [
         sys.executable,
         str(RUNNER_PATH),
         "--model",
@@ -115,13 +111,26 @@ def _build_offline_command(*, output_path: Path) -> list[str]:
         str(FPS),
         "--seed",
         str(SEED),
-        "--tensor-parallel-size",
-        "2",
-        "--vae-patch-parallel-size",
-        "2",
-        "--output",
-        str(output_path),
     ]
+
+    # Add parallel args only on NPU (detected via torch_npu availability)
+    try:
+        import torch
+
+        if hasattr(torch, "npu") and torch.npu.is_available():  # type: ignore[attr-defined]
+            cmd.extend(
+                [
+                    "--tensor-parallel-size",
+                    "2",
+                    "--vae-patch-parallel-size",
+                    "2",
+                ]
+            )
+    except (ImportError, AttributeError, RuntimeError):
+        pass
+
+    cmd.extend(["--output", str(output_path)])
+    return cmd
 
 
 def _generate_offline_video() -> Path:
