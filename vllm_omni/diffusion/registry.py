@@ -375,7 +375,6 @@ def initialize_model(
 
         vae_pp_size = od_config.parallel_config.vae_patch_parallel_size
         is_distributed_vae = hasattr(model, "vae") and isinstance(model.vae, DistributedVaeMixin)
-
         if vae_pp_size > 1 and not is_distributed_vae:
             logger.warning(
                 "vae_patch_parallel_size=%d is set but VAE patch parallelism is NOT enabled for %s; ignoring.",
