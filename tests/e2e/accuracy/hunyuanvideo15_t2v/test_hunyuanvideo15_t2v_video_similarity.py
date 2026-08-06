@@ -10,7 +10,6 @@ import pytest
 from tests.e2e.accuracy.helpers import (
     assert_video_metadata,
     assert_video_similarity_metrics,
-    is_accelerator_available,
     is_npu_available,
     probe_binary,
     probe_video,
@@ -157,9 +156,6 @@ def _generate_online_video(*, omni_server, openai_client, timeout_seconds: int) 
 @pytest.mark.benchmark
 @hardware_test(res={"cuda": "H100", "npu": "A3"}, num_cards={"cuda": 1, "npu": 2})
 def test_hunyuanvideo15_t2v_diffusers_offline_generates_video() -> None:
-    if not is_accelerator_available():
-        pytest.skip("HunyuanVideo-1.5 T2V offline accuracy test requires CUDA or NPU.")
-
     probe_binary("ffprobe")
     if not RUNNER_PATH.exists():
         raise AssertionError(f"Offline runner does not exist: {RUNNER_PATH}")
@@ -178,9 +174,6 @@ def test_hunyuanvideo15_t2v_online_serving_generates_video(
     openai_client,
     hunyuanvideo15_online_timeout_seconds: int,
 ) -> None:
-    if not is_accelerator_available():
-        pytest.skip("HunyuanVideo-1.5 T2V online accuracy test requires CUDA or NPU.")
-
     probe_binary("ffprobe")
     online_path = _generate_online_video(
         omni_server=omni_server,
@@ -195,9 +188,6 @@ def test_hunyuanvideo15_t2v_online_serving_generates_video(
 @pytest.mark.benchmark
 @hardware_test(res={"cuda": "H100", "npu": "A3"}, num_cards={"cuda": 1, "npu": 2})
 def test_hunyuanvideo15_t2v_serving_matches_offline_video_similarity() -> None:
-    if not is_accelerator_available():
-        pytest.skip("HunyuanVideo-1.5 T2V video similarity test requires CUDA or NPU.")
-
     probe_binary("ffmpeg")
     probe_binary("ffprobe")
     online_path, offline_path = _artifact_paths()

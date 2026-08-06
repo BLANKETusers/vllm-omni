@@ -11,7 +11,6 @@ from tests.e2e.accuracy.helpers import (
     assert_video_metadata,
     assert_video_similarity_metrics,
     build_online_image_reference,
-    is_accelerator_available,
     is_npu_available,
     materialize_image_source,
     probe_binary,
@@ -198,9 +197,6 @@ def _generate_online_video(
 def test_hunyuanvideo15_i2v_diffusers_offline_generates_video(
     hunyuanvideo15_i2v_image_source: str | None,
 ) -> None:
-    if not is_accelerator_available():
-        pytest.skip("HunyuanVideo-1.5 I2V offline accuracy test requires CUDA or NPU.")
-
     probe_binary("ffprobe")
     if not RUNNER_PATH.exists():
         raise AssertionError(f"Offline runner does not exist: {RUNNER_PATH}")
@@ -222,9 +218,6 @@ def test_hunyuanvideo15_i2v_online_serving_generates_video(
     hunyuanvideo15_i2v_image_source: str | None,
     hunyuanvideo15_online_timeout_seconds: int,
 ) -> None:
-    if not is_accelerator_available():
-        pytest.skip("HunyuanVideo-1.5 I2V online accuracy test requires CUDA or NPU.")
-
     probe_binary("ffprobe")
     image_source = _resolve_image_source(hunyuanvideo15_i2v_image_source)
     validate_image_source(image_source)
@@ -244,9 +237,6 @@ def test_hunyuanvideo15_i2v_online_serving_generates_video(
 def test_hunyuanvideo15_i2v_serving_matches_offline_video_similarity(
     hunyuanvideo15_i2v_image_source: str | None,
 ) -> None:
-    if not is_accelerator_available():
-        pytest.skip("HunyuanVideo-1.5 I2V video similarity test requires CUDA or NPU.")
-
     probe_binary("ffmpeg")
     probe_binary("ffprobe")
     image_source = _resolve_image_source(hunyuanvideo15_i2v_image_source)
