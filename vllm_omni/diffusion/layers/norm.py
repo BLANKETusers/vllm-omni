@@ -65,7 +65,7 @@ class LayerNorm(nn.LayerNorm, CustomOp):
 
 
 class RMSNorm(CustomOp):
-    def __init__(self, hidden_size: int, eps: float = 1e-6, dtype: torch.dtype = torch.float32) -> None:
+    def __init__(self, hidden_size: int, eps: float = 1e-6, dtype: torch.dtype | None = None) -> None:
         super().__init__()
         self.weight = nn.Parameter(torch.ones(hidden_size, dtype=dtype))
         self.variance_epsilon = eps
