@@ -67,7 +67,8 @@ class LayerNorm(nn.LayerNorm, CustomOp):
 class RMSNorm(CustomOp):
     def __init__(self, hidden_size: int, eps: float = 1e-6, dtype: torch.dtype | None = None) -> None:
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(hidden_size, dtype=dtype))
+        weight_dtype = dtype or torch.get_default_dtype()
+        self.weight = nn.Parameter(torch.ones(hidden_size, dtype=weight_dtype))
         self.variance_epsilon = eps
 
     def _forward_fused(self, x: torch.Tensor) -> torch.Tensor:
