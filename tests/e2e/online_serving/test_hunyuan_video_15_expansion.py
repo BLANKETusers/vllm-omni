@@ -5,8 +5,18 @@ Tests of common diffusion feature combinations in online serving mode
 for HunyuanVideo-1.5-T2V (480p).
 
 Coverage (H100, since model cannot fit L4):
-- CacheDiT + Layerwise CPU offloading (1 GPU)
-- CacheDiT + TP=2 + VAE patch parallel=2 (2 GPUs)
+- CPU offloading (1 GPU) — ``core_model`` + ``advanced_model``
+- CacheDiT + Layerwise CPU offloading (1 GPU) — ``advanced_model``
+- CacheDiT + TP=2 + VAE patch parallel=2 (2 GPUs) — ``advanced_model``
+
+HunyuanVideo-1.5 is a high-priority model, so the lightweight single-card row runs on
+every PR (L2) and all rows run on merge (L3). The heavyweight video similarity suites
+stay nightly-only in ``tests/e2e/accuracy/hunyuanvideo15_{t2v,i2v}/``.
+
+From ``tests/``::
+
+    pytest -s -v e2e/online_serving/test_hunyuan_video_15_expansion.py -m "core_model and diffusion" --run-level=core_model
+    pytest -s -v e2e/online_serving/test_hunyuan_video_15_expansion.py -m "advanced_model and diffusion" --run-level=advanced_model
 """
 
 import pytest
@@ -24,9 +34,14 @@ MODEL = "hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v"
 SINGLE_CARD_MARKS = hardware_marks(res={"cuda": "H100"})
 PARALLEL_MARKS = hardware_marks(res={"cuda": "H100"}, num_cards=2)
 
+# The plain single-card row is cheap enough for PR-level CI; the CacheDiT / parallel rows
+# only run from merge onwards.
+_CORE_MARKS = [pytest.mark.core_model, pytest.mark.advanced_model]
+_ADVANCED_MARKS = [pytest.mark.advanced_model]
+
 
 def _get_diffusion_feature_cases(model: str):
-    """Return L4 diffusion feature cases for HunyuanVideo-1.5.
+    """Return diffusion feature cases for HunyuanVideo-1.5.
 
     Designed for 2x H100 environment per issue #1832.
     """
@@ -40,7 +55,7 @@ def _get_diffusion_feature_cases(model: str):
                 ],
             ),
             id="single_card_cpu_offload",
-            marks=SINGLE_CARD_MARKS,
+            marks=SINGLE_CARD_MARKS + _CORE_MARKS,
         ),
         # (1 GPU) CacheDiT + Layerwise CPU offloading
         pytest.param(
@@ -53,7 +68,7 @@ def _get_diffusion_feature_cases(model: str):
                 ],
             ),
             id="single_card_cachedit_layerwise",
-            marks=SINGLE_CARD_MARKS,
+            marks=SINGLE_CARD_MARKS + _ADVANCED_MARKS,
         ),
         # (2 GPUs) CacheDiT + TP=2 + VAE patch parallel=2
         pytest.param(
@@ -70,7 +85,7 @@ def _get_diffusion_feature_cases(model: str):
                 ],
             ),
             id="parallel_cachedit_tp2_vae2",
-            marks=PARALLEL_MARKS,
+            marks=PARALLEL_MARKS + _ADVANCED_MARKS,
         ),
     ]
 
@@ -84,7 +99,7 @@ def test_hunyuan_video_15_t2v(
     omni_server: OmniServer,
     openai_client: OpenAIClientHandler,
 ):
-    """L4 diffusion feature coverage for HunyuanVideo-1.5-T2V on H100."""
+    """Diffusion feature coverage for HunyuanVideo-1.5-T2V on H100."""
     form_data = {
         "prompt": PROMPT,
         "negative_prompt": NEGATIVE_PROMPT,
