@@ -29,6 +29,24 @@ def _ensure_forward_context_attr(name: str, annotation: Any, default: Any) -> No
         setattr(_vllm_fc.ForwardContext, name, default)
 
 
+def _ensure_ascend_customop_registered(vllm_config: VllmConfig) -> None:
+    """Register vllm-ascend's out-of-tree layer implementations.
+
+    ``register_ascend_customop`` is only called from vllm-ascend's own
+    ``NPUWorker.__init__``. The diffusion path runs on omni's DiffusionWorker,
+    so the OOT registry stays empty and ``PluggableLayer.__new__`` falls back to
+    the upstream classes. FusedMoE then breaks outright: vllm-ascend's
+    ``patch_fused_moe`` passes ``n_shared_experts`` through
+    ``routed_experts_args``, which only ``AscendRoutedExperts`` accepts.
+
+    Upstream guards this with ``_ASCEND_CUSTOMOP_IS_REIGISTERED``, so calling it
+    again once the worker has run is a no-op.
+    """
+    from vllm_ascend.utils import register_ascend_customop
+
+    register_ascend_customop(vllm_config)
+
+
 def _init_mc2_group_for_diffusion(
     backend: str,
     local_rank: int,
@@ -65,6 +83,8 @@ def _select_moe_comm_method(vllm_config: VllmConfig) -> MoECommType | None:
 
 def prepare_fused_moe_runtime() -> None:
     vllm_config = omni_get_ctx().vllm_config
+
+    _ensure_ascend_customop_registered(vllm_config)
 
     backend = torch.distributed.get_backend(get_world_group().device_group)
     local_rank = get_world_group().local_rank
