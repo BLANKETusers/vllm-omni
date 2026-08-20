@@ -30,7 +30,7 @@ def _ensure_forward_context_attr(name: str, annotation: Any, default: Any) -> No
 
 
 def _ensure_ascend_moe_customop_registered() -> None:
-    """Register vllm-ascend's out-of-tree MoE layer implementations.
+    """Register vllm-ascend's out-of-tree MoE layer implementations here.
 
     vllm-ascend registers its OOT layers from ``register_ascend_customop``,
     which only ever runs inside their own ``NPUWorker.__init__``. The diffusion
