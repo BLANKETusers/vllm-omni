@@ -6,17 +6,19 @@ for HunyuanVideo-1.5-T2V (480p).
 
 Coverage (H100, since model cannot fit L4):
 - CPU offloading (1 GPU) — ``core_model`` + ``advanced_model``
-- CacheDiT + Layerwise CPU offloading (1 GPU) — ``advanced_model``
-- CacheDiT + TP=2 + VAE patch parallel=2 (2 GPUs) — ``advanced_model``
+- CacheDiT + Layerwise CPU offloading (1 GPU) — ``full_model``
+- CacheDiT + TP=2 + VAE patch parallel=2 (2 GPUs) — ``full_model``
 
-HunyuanVideo-1.5 is a high-priority model, so the lightweight single-card row runs on
-every PR (L2) and all rows run on merge (L3). The heavyweight video similarity suites
-stay nightly-only in ``tests/e2e/accuracy/hunyuanvideo15_{t2v,i2v}/``.
+HunyuanVideo-1.5 is a high-priority model, so only the most basic single-card deployment
+row runs on every PR (L2) and on merge (L3). The heavyweight feature combinations stay
+nightly-only (L4), together with the video similarity suites in
+``tests/e2e/accuracy/hunyuanvideo15_{t2v,i2v}/``.
 
 From ``tests/``::
 
     pytest -s -v e2e/online_serving/test_hunyuan_video_15_expansion.py -m "core_model and diffusion" --run-level=core_model
     pytest -s -v e2e/online_serving/test_hunyuan_video_15_expansion.py -m "advanced_model and diffusion" --run-level=advanced_model
+    pytest -s -v e2e/online_serving/test_hunyuan_video_15_expansion.py -m "full_model and diffusion" --run-level=full_model
 """
 
 import pytest
@@ -24,7 +26,7 @@ import pytest
 from tests.helpers.mark import hardware_marks
 from tests.helpers.runtime import OmniServer, OmniServerParams, OpenAIClientHandler
 
-pytestmark = [pytest.mark.diffusion, pytest.mark.slow]
+pytestmark = [pytest.mark.diffusion]
 
 PROMPT = "A cat walking across a sunlit garden, cinematic lighting, slow motion."
 NEGATIVE_PROMPT = "low quality, blurry, distorted"
@@ -34,10 +36,10 @@ MODEL = "hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v"
 SINGLE_CARD_MARKS = hardware_marks(res={"cuda": "H100"})
 PARALLEL_MARKS = hardware_marks(res={"cuda": "H100"}, num_cards=2)
 
-# The plain single-card row is cheap enough for PR-level CI; the CacheDiT / parallel rows
-# only run from merge onwards.
+# Only the most basic single-card deployment row is cheap enough for PR (L2) / merge (L3)
+# CI; the CacheDiT / parallel feature combinations run nightly (L4).
 _CORE_MARKS = [pytest.mark.core_model, pytest.mark.advanced_model]
-_ADVANCED_MARKS = [pytest.mark.advanced_model]
+_FULL_MARKS = [pytest.mark.full_model]
 
 
 def _get_diffusion_feature_cases(model: str):
@@ -68,7 +70,7 @@ def _get_diffusion_feature_cases(model: str):
                 ],
             ),
             id="single_card_cachedit_layerwise",
-            marks=SINGLE_CARD_MARKS + _ADVANCED_MARKS,
+            marks=SINGLE_CARD_MARKS + _FULL_MARKS,
         ),
         # (2 GPUs) CacheDiT + TP=2 + VAE patch parallel=2
         pytest.param(
@@ -85,7 +87,7 @@ def _get_diffusion_feature_cases(model: str):
                 ],
             ),
             id="parallel_cachedit_tp2_vae2",
-            marks=PARALLEL_MARKS + _ADVANCED_MARKS,
+            marks=PARALLEL_MARKS + _FULL_MARKS,
         ),
     ]
 
