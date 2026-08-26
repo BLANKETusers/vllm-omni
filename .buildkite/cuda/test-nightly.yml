@@ -259,8 +259,6 @@ steps:
         key: nightly-diffusion-x2iat-performance-qwen-image
         timeout_in_minutes: 180
         commands:
-          - export DIFFUSION_BENCHMARK_DIR=tests/dfx/perf/results
-          - export DIFFUSION_ATTENTION_BACKEND=FLASH_ATTN
           - export CACHE_DIT_VERSION=1.5.0
           - |
             set +e
@@ -328,8 +326,6 @@ steps:
         key: nightly-diffusion-x2v-performance
         timeout_in_minutes: 180
         commands:
-          - export DIFFUSION_BENCHMARK_DIR=tests/dfx/perf/results
-          - export DIFFUSION_ATTENTION_BACKEND=FLASH_ATTN
           - |
             set +e
             pytest -s -v tests/dfx/perf/scripts/run_diffusion_benchmark.py --test-config-file tests/dfx/perf/tests/test_wan22_i2v_vllm_omni.json
@@ -346,8 +342,6 @@ steps:
         key: nightly-diffusion-x2v-performance-hunyuanvideo15
         timeout_in_minutes: 180
         commands:
-          - export DIFFUSION_BENCHMARK_DIR=tests/dfx/perf/results
-          - export DIFFUSION_ATTENTION_BACKEND=FLASH_ATTN
           - |
             set +e
             pytest -s -v tests/dfx/perf/scripts/run_diffusion_benchmark.py --test-config-file tests/dfx/perf/tests/test_hunyuanvideo15_t2v_vllm_omni.json
@@ -364,8 +358,6 @@ steps:
         key: nightly-diffusion-x2v-performance-minimax-h3
         timeout_in_minutes: 180
         commands:
-          - export DIFFUSION_BENCHMARK_DIR=tests/dfx/perf/results
-          - export DIFFUSION_ATTENTION_BACKEND=FLASH_ATTN
           - |
             set +e
             pytest -s -v tests/dfx/perf/scripts/run_diffusion_benchmark.py --test-config-file tests/dfx/perf/tests/test_minimax_h3_vllm_omni.json
