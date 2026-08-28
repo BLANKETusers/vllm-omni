@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """
 Tests of common diffusion feature combinations in online serving mode
 for HunyuanVideo-1.5-T2V (480p).
@@ -24,7 +24,7 @@ From ``tests/``::
 import pytest
 
 from tests.helpers.mark import hardware_marks
-from tests.helpers.runtime import OmniServer, OmniServerParams, OpenAIClientHandler
+from tests.helpers.runtime import OmniServer, OmniServerParams, OnlineOmniClient
 
 pytestmark = [pytest.mark.diffusion]
 
@@ -99,7 +99,7 @@ def _get_diffusion_feature_cases(model: str):
 )
 def test_hunyuan_video_15_t2v(
     omni_server: OmniServer,
-    openai_client: OpenAIClientHandler,
+    online_client: OnlineOmniClient,
 ):
     """Diffusion feature coverage for HunyuanVideo-1.5-T2V on H100."""
     form_data = {
@@ -118,4 +118,4 @@ def test_hunyuan_video_15_t2v(
         "form_data": form_data,
     }
 
-    openai_client.send_video_diffusion_request(request_config)
+    online_client.send_video_diffusion_request(request_config)
