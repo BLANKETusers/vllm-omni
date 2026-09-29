@@ -33,6 +33,25 @@ from vllm_omni.lora.utils import stable_lora_int_id
 logger = init_logger(__name__)
 
 
+def _moe_lora_proj_names(moe_config: object | None) -> list[str]:
+    """PEFT expert projection names in upstream ``set_lora`` ``[w1, w2, w3]`` order.
+
+    Single source of truth shared by the expected-modules whitelist (built
+    before checkpoint loading) and the per-expert gather in
+    ``_bind_moe_adapter_weights`` (F3-bind), so the two can never drift.
+
+    For a gated MoE (``is_act_and_mul=True``) the PEFT checkpoint stores
+    ``gate_proj`` / ``down_proj`` / ``up_proj`` per expert, mapped to upstream's
+    ``[w1, w2, w3]`` slots. For a non-gated MoE there is no gate, so ``up_proj``
+    is ``w13`` (w1) and ``down_proj`` is w2; the w3 slot is a placeholder
+    reusing ``up_proj`` that upstream ignores when ``_w13_slices == 1``.
+    """
+    is_gated = bool(getattr(moe_config, "is_act_and_mul", True))
+    if is_gated:
+        return ["gate_proj", "down_proj", "up_proj"]
+    return ["up_proj", "down_proj", "up_proj"]
+
+
 class LoRABackend(str, Enum):
     PEFT = "peft"
     DISTILL = "distill"
@@ -97,6 +116,12 @@ class DiffusionLoRAManager:
             self._supported_lora_modules,
             self._packed_modules_mapping,
         )
+        # MoE expert keys are checked against expected_lora_modules by an
+        # *indexed* suffix (``experts.{i}.{proj}``), not a bare proj name, so
+        # the model's packed/stacked mapping cannot whitelist them. Enumerate
+        # them directly from every MoERunner before layer replacement. See
+        # RFC: Diffusion MoE LoRA Bridge — HunyuanImage3 Baseline (F3-load).
+        self._expected_lora_modules = self._expand_expected_modules_for_moe(self._expected_lora_modules)
 
         # LRU-style cache management
         self.max_cached_adapters = max_cached_adapters  # max_cpu_loras
@@ -217,6 +242,45 @@ class DiffusionLoRAManager:
                     )
 
         return mapping
+
+    def _expand_expected_modules_for_moe(self, expected: set[str]) -> set[str]:
+        """Add indexed MoE expert suffixes so PEFT expert keys are not rejected
+        as unexpected during LoRA checkpoint loading.
+
+        Upstream ``LoRAModel.from_local_checkpoint`` (vllm/lora/lora_model.py,
+        ``check_unexpected_modules``) classifies a key like
+        ``...experts.0.gate_proj.lora_A.weight`` with
+        ``expert_suffix = module_name[module_name.find(".experts") + 1:]`` —
+        i.e. the literal indexed suffix ``experts.0.gate_proj`` (everything
+        after the first ``.experts``) — and rejects it unless that exact suffix
+        is in ``expected_lora_modules``. Bare suffixes (``gate_proj``) do NOT
+        match, so a model's ``packed_modules_mapping`` / ``stacked_params_mapping``
+        cannot whitelist expert keys; only an indexed enumeration can.
+
+        We enumerate ``experts.{i}.{proj}`` for every *global* expert directly
+        from each ``MoERunner`` in the pipeline (the checkpoint holds all global
+        experts; omni does not pass ``moe_ep_spec`` to ``from_local_checkpoint``,
+        so EP slicing happens later in F3-bind, not at load time). Must run
+        before layer replacement, while the bare runner instances are still
+        reachable via ``named_modules``. Proj names are shared with
+        ``_bind_moe_adapter_weights`` via ``_moe_lora_proj_names``.
+        """
+        expanded = set(expected)
+        from vllm.model_executor.layers.fused_moe import MoERunner
+
+        for _, module in self.pipeline.named_modules():
+            if not isinstance(module, MoERunner):
+                continue
+            moe_config = getattr(module, "moe_config", None)
+            global_num_experts = getattr(module, "global_num_experts", None)
+            if global_num_experts is None:
+                global_num_experts = getattr(moe_config, "num_experts", 0)
+            if not global_num_experts:
+                continue
+            for proj in set(_moe_lora_proj_names(moe_config)):
+                for ei in range(global_num_experts):
+                    expanded.add(f"experts.{ei}.{proj}")
+        return expanded
 
     def _get_packed_sublayer_suffixes(self, packed_module_suffix: str, n_slices: int) -> list[str] | None:
         sub_suffixes = self._packed_modules_mapping.get(packed_module_suffix)
@@ -592,6 +656,22 @@ class DiffusionLoRAManager:
         for full_module_name, lora_layer in self._lora_modules.items():
             lora_weights = self._get_lora_weights(lora_model, full_module_name)
 
+            # MoE LoRA bridge (F3): a MoERunner-backed wrapper expects set_lora
+            # to receive per-projection lists (w1=gate, w2=down, w3=up for
+            # gated MoE) with expert-dim = local experts, already EP-sliced.
+            # Unlike dense packed layers, the adapter is stored per-expert
+            # (experts.{i}.gate_proj / up_proj / down_proj), so we must
+            # gather+stack across experts here. See RFC: Diffusion MoE LoRA
+            # Bridge — HunyuanImage3 Baseline (F3).
+            if self._bind_moe_adapter_weights(
+                full_module_name=full_module_name,
+                lora_layer=lora_layer,
+                lora_model=lora_model,
+                scale=scale,
+                bound_lora_names_cb=_record_bound,
+            ):
+                continue
+
             if lora_weights is None:
                 n_slices = getattr(lora_layer, "n_slices", 1)
                 if n_slices > 1:
@@ -738,6 +818,112 @@ class DiffusionLoRAManager:
                 lora_model=lora_model,
                 bound_lora_names=frozenset(bound_lora_names),
             )
+
+    def _bind_moe_adapter_weights(
+        self,
+        *,
+        full_module_name: str,
+        lora_layer,
+        lora_model: LoRAModel,
+        scale: float,
+        bound_lora_names_cb,
+    ) -> bool:
+        """Bind a MoERunner-backed LoRA wrapper (F3).
+
+        Returns True if ``lora_layer`` is a MoE LoRA wrapper and binding was
+        handled (including ``reset_lora`` when no matching adapter is found);
+        False if ``lora_layer`` is not a MoE wrapper and the caller should
+        fall through to the dense binding path.
+
+        Upstream ``FusedMoEWithLoRA.set_lora`` expects, for a gated MoE::
+
+            lora_a = [w1_a, w2_a, w3_a]   # gate, down, up
+            lora_b = [w1_b, w2_b, w3_b]
+
+        with each tensor's expert-dim equal to ``local_num_experts`` and already
+        EP-sliced. PEFT checkpoints store these per expert
+        (``experts.{i}.gate_proj`` / ``up_proj`` / ``down_proj``), so this
+        method gathers them across local experts, stacks, applies scale, and
+        calls ``set_lora``. Non-gated MoE (``is_act_and_mul=False``) uses a
+        single w13 slice and a placeholder w3 — handled by upstream via
+        ``_w13_slices``; we always pass 3 entries and let upstream ignore w3
+        when ``_w13_slices == 1``.
+
+        EP slicing: the routed expert layout is contiguous per rank, so we
+        narrow to ``[ep_rank * local : (ep_rank+1) * local]`` when the source
+        spans all global experts.
+        """
+        from vllm.lora.layers.fused_moe import FusedMoEWithLoRA
+        from vllm.model_executor.layers.fused_moe import MoERunner
+
+        base_layer = getattr(lora_layer, "base_layer", None)
+        if not isinstance(base_layer, MoERunner):
+            return False
+        if not isinstance(lora_layer, FusedMoEWithLoRA):
+            # AscendFusedMoEWithLoRA subclasses FusedMoEWithLoRA, so this covers
+            # both GPU and NPU wrappers.
+            return False
+
+        moe_config = getattr(base_layer, "moe_config", None)
+        local_num_experts = getattr(lora_layer, "local_num_experts", None)
+        use_ep = bool(getattr(lora_layer, "use_ep", False))
+        ep_rank = getattr(lora_layer, "ep_rank", 0)
+        is_gated = bool(getattr(moe_config, "is_act_and_mul", True))
+        # PEFT logical projection names for routed experts, single-sourced with
+        # the expected-modules whitelist (F3-load) via _moe_lora_proj_names.
+        proj_names = _moe_lora_proj_names(moe_config)  # [w1, w2, w3]
+
+        prefix = full_module_name
+        per_proj: list[list] = []  # per-projection list of (lora_a, lora_b) or None
+        any_found = False
+        for proj in proj_names:
+            expert_factors: list = []
+            if local_num_experts is None:
+                per_proj.append(expert_factors)
+                continue
+            for ei in range(local_num_experts):
+                # The PEFT checkpoint names experts by global index; under EP
+                # this rank owns [ep_rank*local, (ep_rank+1)*local).
+                global_ei = ep_rank * local_num_experts + ei if use_ep else ei
+                # full_module_name is the runner path, which already ends in the
+                # experts-container attribute (e.g. "...moe.experts"); the PEFT
+                # key is "{runner_path}.{i}.{proj}", so no second ".experts".
+                cand = f"{prefix}.{global_ei}.{proj}"
+                sub = self._get_lora_weights(lora_model, cand)
+                if sub is not None and not isinstance(sub, PackedLoRALayerWeights):
+                    expert_factors.append((sub.lora_a, sub.lora_b))
+                    any_found = True
+                    bound_lora_names_cb(sub)
+                else:
+                    expert_factors.append(None)
+            per_proj.append(expert_factors)
+
+        if not any_found:
+            lora_layer.reset_lora(0)
+            return True
+
+        lora_a_list: list = []
+        lora_b_list: list = []
+        for factors in per_proj:
+            if not factors or all(f is None for f in factors):
+                lora_a_list.append(None)
+                lora_b_list.append(None)
+                continue
+            a_stack = torch.stack([f[0] for f in factors], dim=0)
+            b_stack = torch.stack([f[1] for f in factors], dim=0)
+            lora_a_list.append(a_stack)
+            lora_b_list.append(b_stack * scale)
+
+        lora_layer.set_lora(index=0, lora_a=lora_a_list, lora_b=lora_b_list)
+        logger.debug(
+            "Activated MoE LoRA for %s (local_experts=%d, gated=%s, ep=%s, scale=%.2f)",
+            full_module_name,
+            local_num_experts,
+            is_gated,
+            use_ep,
+            scale,
+        )
+        return True
 
     def _reset_lora_layers(self) -> None:
         for lora_layer in self._lora_modules.values():

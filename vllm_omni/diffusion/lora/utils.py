@@ -1,11 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 from __future__ import annotations
 
 import torch.nn as nn
 from transformers import PretrainedConfig
 from vllm.config.lora import LoRAConfig
+from vllm.lora.layers.fused_moe import FusedMoEWithLoRA
+from vllm.model_executor.layers.fused_moe import MoERunner
+from vllm.platforms import current_platform
 
 from vllm_omni.diffusion.lora.layers import (
     DiffusionColumnParallelLinearWithLoRA,
@@ -15,6 +18,21 @@ from vllm_omni.diffusion.lora.layers import (
     DiffusionReplicatedLinearWithLoRA,
     DiffusionRowParallelLinearWithLoRA,
 )
+
+
+def _select_moe_lora_wrapper_cls() -> type:
+    """Pick the MoE LoRA wrapper class for the current platform.
+
+    GPU/CUDA reuses upstream vLLM's native ``FusedMoEWithLoRA``. NPU requires
+    ``AscendFusedMoEWithLoRA`` from vllm-ascend, which must have been
+    registered via ``refresh_all_lora_classes`` at platform init (F2).
+    See RFC: Diffusion MoE LoRA Bridge — HunyuanImage3 Baseline (F1/F2).
+    """
+    if current_platform.device_type == "npu":
+        from vllm_ascend.lora.fused_moe import AscendFusedMoEWithLoRA
+
+        return AscendFusedMoEWithLoRA
+    return FusedMoEWithLoRA
 
 
 def _match_target_modules(module_name: str, target_modules: list[str]) -> bool:
@@ -65,6 +83,31 @@ def from_layer_diffusion(
     """
     Diffusion-specific layer replacement. similar to vLLM's `from_layer`
     """
+    # MoE runner bridge (F1): upstream vLLM's FusedMoEWithLoRA (GPU) /
+    # vllm-ascend's AscendFusedMoEWithLoRA (NPU) already wrap MoERunner. The
+    # diffusion manager only needs to select the platform wrapper and call it
+    # directly — omni does not maintain a second MoE LoRA compute. The MoE
+    # wrapper carries its own target semantics (gate_up_proj/down_proj), so
+    # packed_modules_list is irrelevant here; the branch must come before the
+    # dense classes so a MoERunner is not mistaken for a dense linear.
+    # See RFC: Diffusion MoE LoRA Bridge — HunyuanImage3 Baseline (F1).
+    if isinstance(layer, MoERunner):
+        wrapper_cls = _select_moe_lora_wrapper_cls()
+        instance = wrapper_cls(layer)
+        instance.create_lora_weights(max_loras, lora_config, model_config)
+        # F4 — runtime context forwarding: upstream FusedMoEWithLoRA.forward()
+        # only delegates to base_layer.forward(), so the runner's pre-hooks
+        # (num_tokens / DP metadata / NPU dispatch context, registered in
+        # FusedMoE.__new__) still fire when base_layer.forward is called.
+        # No explicit hook copy is needed; assert the runner still carries its
+        # pre-hooks so a future upstream change that strips them is caught.
+        assert len(layer._forward_pre_hooks) > 0, (
+            "MoERunner lost its forward pre-hooks after LoRA wrapping; "
+            "ForwardContext.num_tokens / DP metadata would be uninitialized "
+            "(see RFC F4)."
+        )
+        return instance
+
     diffusion_lora_classes = [
         DiffusionMergedQKVParallelLinearWithLoRA,
         DiffusionQKVParallelLinearWithLoRA,
