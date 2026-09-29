@@ -297,6 +297,7 @@ markers = [
     "cards_6: [hardware-cards] Tests that require 6 accelerator cards",
     "cards_7: [hardware-cards] Tests that require 7 accelerator cards",
     "cards_8: [hardware-cards] Tests that require 8 accelerator cards",
+    "cards_12: [hardware-cards] Tests that require 12 accelerator cards",
     # more detailed markers
     "sp: Sequence parallelism tests (multi-GPU)",
     "slow: [ci-level] Slow tests (may skip in quick CI)",

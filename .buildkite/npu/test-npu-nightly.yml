@@ -247,6 +247,23 @@ steps:
             buildkite-agent artifact upload "tests/dfx/perf/results/diffusion_result_*.json"
             buildkite-agent artifact upload "tests/dfx/perf/results/logs/*.log"
             exit $$EXIT
+      - label: ":full_moon: Diffusion Perf · HunyuanImage3 IT2I Inline · 12-NPU"
+        source_file_dependencies: diffusion_hunyuan_image3_perf
+        timeout_in_minutes: 180
+        mirror_hardwares: a3_npu_16
+        env:
+          VLLM_WORKER_MULTIPROC_METHOD: spawn
+          HF_TOKEN: "${HF_TOKEN}"
+          DIFFUSION_ATTENTION_BACKEND: TORCH_SDPA
+        commands:
+          - export DIFFUSION_BENCHMARK_DIR=tests/dfx/perf/results
+          - |
+            set +e
+            pytest -s -v tests/dfx/perf/scripts/run_diffusion_benchmark.py -m "A3 and cards_12" --test-config-file tests/dfx/perf/tests/test_hunyuan_image3_it2i_npu12.json
+            EXIT=$$?
+            buildkite-agent artifact upload "tests/dfx/perf/results/diffusion_result_*.json"
+            buildkite-agent artifact upload "tests/dfx/perf/results/logs/*.log"
+            exit $$EXIT
       - label: ":full_moon: Diffusion X2I(&A&T) · Perf Test · Qwen-Image · Single-NPU"
         source_file_dependencies: diffusion_qwen_image_perf
         key: nightly-diffusion-x2iat-performance-qwen-image-single-npu
