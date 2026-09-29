@@ -42,7 +42,7 @@ pytestmark = [pytest.mark.full_model, pytest.mark.diffusion]
 _EXPERT_PROJECTIONS = ("gate_proj", "up_proj", "down_proj")
 
 
-@hardware_test(res={"cuda": ["H100", "B200"]}, num_cards=4)
+@hardware_test(res={"cuda": ["H100", "B200"], "npu": "A3"}, num_cards=4)
 def test_hunyuan_image3_dit_moe_lora_generation(tmp_path: Path):
     model = "tencent/HunyuanImage-3.0-Instruct"
     config = json.loads(Path(hf_hub_download(model, "config.json")).read_text())
@@ -108,6 +108,26 @@ def test_hunyuan_image3_dit_moe_lora_generation(tmp_path: Path):
                         "parallel_config": {"tensor_parallel_size": tp},
                     }
                 ],
+                # NPU (Ascend 910/A3) overrides: lower mem util + auto moe backend.
+                # Also makes NPUOmniPlatform.init_diffusion_worker_vllm_config fire
+                # refresh_all_lora_classes (F2) so AscendFusedMoEWithLoRA is
+                # selectable by _select_moe_lora_wrapper_cls (F1).
+                "platforms": {
+                    "npu": {
+                        "stages": [
+                            {
+                                "stage_id": 0,
+                                "gpu_memory_utilization": 0.65,
+                                "moe_backend": "auto",
+                                "devices": ",".join(map(str, range(tp))),
+                                "parallel_config": {
+                                    "tensor_parallel_size": tp,
+                                    "enable_expert_parallel": True,
+                                },
+                            }
+                        ]
+                    }
+                },
             }
         )
     )
