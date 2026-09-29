@@ -19,6 +19,7 @@ Run with --run-level full_model on four GPUs with at least 80 GiB each.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -44,8 +45,15 @@ _EXPERT_PROJECTIONS = ("gate_proj", "up_proj", "down_proj")
 
 @hardware_test(res={"cuda": ["H100", "B200"], "npu": "A3"}, num_cards=4)
 def test_hunyuan_image3_dit_moe_lora_generation(tmp_path: Path):
-    model = "tencent/HunyuanImage-3.0-Instruct"
-    config = json.loads(Path(hf_hub_download(model, "config.json")).read_text())
+    # Local path wins over the HF repo id, so the test never blocks on a
+    # network download of the multi-GB base weights.
+    #   HUNYUAN_IMAGE3_PATH=/data/models/HunyuanImage-3.0-Instruct pytest ...
+    model = os.environ.get("HUNYUAN_IMAGE3_PATH", "tencent/HunyuanImage-3.0-Instruct")
+    config_path = Path(model) / "config.json"
+    if config_path.is_file():
+        config = json.loads(config_path.read_text())
+    else:
+        config = json.loads(Path(hf_hub_download(model, "config.json")).read_text())
     hidden = config["hidden_size"]
     # moe_intermediate_size may be a list (per-layer); use the first entry.
     moe_inter = config.get("moe_intermediate_size") or config["intermediate_size"]
