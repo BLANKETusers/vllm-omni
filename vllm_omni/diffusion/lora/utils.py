@@ -124,6 +124,38 @@ def from_layer_diffusion(
             return instance.base_layer(*args, **kwargs)
 
         instance.forward = _forward_via_base_call  # type: ignore[method-assign]
+
+        # Suspend/resume fast path: omni's DiffusionLoRAManager toggles an
+        # adapter off/on without re-uploading weights via suspend_lora/
+        # resume_lora (the dense layers gate a slice mask read by apply()).
+        # Upstream FusedMoEWithLoRA defines neither — its on/off switch is the
+        # ``adapter_enabled`` tensor that the routed-experts LoRA delta
+        # injection reads (moe_lora_apply_w13/w2 pass it as adapter_enabled).
+        # Mirror the dense semantics: suspend flips the bound slot's flag to 0
+        # (delta suppressed), resume restores it. The toggle is in-place on the
+        # same tensor object the per-layer MoELoRAContext references, so once
+        # set_mapping publishes the context the forward path observes the
+        # change without rebuilding it. Bound as closures taking no ``self``
+        # param for the same descriptor reason as ``forward`` above: an
+        # instance-attribute function is not descriptor-bound, and the manager
+        # calls these with no positional args.
+        _suspended: list[int | None] = [None]
+
+        def _suspend_lora() -> None:
+            if _suspended[0] is not None:
+                return
+            _suspended[0] = int(instance.adapter_enabled[0].item())
+            instance.adapter_enabled[0] = 0
+
+        def _resume_lora() -> None:
+            prev = _suspended[0]
+            if prev is None:
+                return
+            instance.adapter_enabled[0] = prev
+            _suspended[0] = None
+
+        instance.suspend_lora = _suspend_lora  # type: ignore[method-assign]
+        instance.resume_lora = _resume_lora  # type: ignore[method-assign]
         return instance
 
     diffusion_lora_classes = [
