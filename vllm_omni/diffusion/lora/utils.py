@@ -111,8 +111,17 @@ def from_layer_diffusion(
             "uninitialized."
         )
 
-        def _forward_via_base_call(self, *args, **kwargs):
-            return self.base_layer(*args, **kwargs)
+        # Bind as a closure, not ``instance.forward = fn`` with a ``self``
+        # param: a function assigned as an *instance* attribute is not
+        # descriptor-bound, so ``nn.Module._call_impl`` would hand the first
+        # positional arg to ``self``. The MoE wrapper is called kwargs-only
+        # (``self.experts(hidden_states=..., router_logits=...)``), so that form
+        # raises ``TypeError: missing 1 required positional argument: 'self'``.
+        # The closure captures ``instance`` directly; ``instance.base_layer(...)``
+        # goes through ``nn.Module.__call__`` so the runner's forward pre-hooks
+        # fire as intended.
+        def _forward_via_base_call(*args, **kwargs):
+            return instance.base_layer(*args, **kwargs)
 
         instance.forward = _forward_via_base_call  # type: ignore[method-assign]
         return instance
