@@ -138,6 +138,13 @@ class DiffusionLoRAManager:
         self._lora_modules: dict[str, BaseLayerWithLoRA] = {}
         # Track the maximum LoRA rank we've allocated buffers for.
         self._max_lora_rank: int = 0
+        # Shared punica wrapper for the MoE LoRA delta-injection path (created
+        # lazily by _get_moe_punica_wrapper). Mirrors vLLM's one
+        # llm_punica_wrapper per model: every MoE wrapper's set_mapping gets the
+        # same instance, and token_lora_indices on it maps each token to its
+        # LoRA slot. omni binds a single adapter at slot 0, so every token maps
+        # to 0 and adapter_enabled[0] gates the on/off.
+        self._moe_punica_wrapper = None
 
         logger.info(
             "Initializing DiffusionLoRAManager: device=%s, dtype=%s, max_cached_adapters=%d, static_lora_path=%s",
@@ -999,6 +1006,86 @@ class DiffusionLoRAManager:
             lora_layer.reset_lora(0)
         self._suspended_adapter_id = None
 
+    # ------------------------------------------------------------------
+    # MoE LoRA delta-injection context
+    # ------------------------------------------------------------------
+    # Upstream FusedMoEWithLoRA (GPU) / AscendFusedMoEWithLoRA (NPU) only inject
+    # the routed-expert LoRA delta at forward time once set_mapping(punica) has
+    # published the per-layer MoELoRAContext. On Ascend that context lands on
+    # routed_experts._ascend_moe_lora_context and the unquant MoE path gates the
+    # whole delta branch on ``if lora_context is not None`` (moe_mlp
+    # .unquant_apply_mlp). Without set_mapping the context is None, so bound
+    # weights are never injected and adapted == baseline.
+    #
+    # The AlltoAll/AllGather index plumbing (prepare_lora_indices /
+    # preprocess_lora_indices / all2all_lora_indices) runs automatically inside
+    # the comm method once the context is published, reading
+    # punica_wrapper.token_lora_indices to map each token to its LoRA slot.
+    # omni binds a single adapter at slot 0, so every token maps to 0; the
+    # adapter_enabled[0] flag (toggled by suspend_lora/resume_lora on the MoE
+    # wrapper) gates whether the delta is actually applied.
+
+    _MOE_PUNICA_MAX_TOKENS = 65536
+    # Covers up to ~4096x4096 latent patches (each patch = 1 MoE token). The
+    # per-forward token count is always <= this; prepare_lora_indices narrows
+    # token_lora_indices down to the actual num_tokens, so a larger buffer is
+    # just unused tail. Raise only if a resolution exceeding this is needed.
+
+    def _get_moe_punica_wrapper(self):
+        """Lazily create the shared punica wrapper for the MoE LoRA path.
+
+        Dense diffusion LoRA layers bypass the punica (they override apply()
+        to use direct matmul), so this is only created when a MoE adapter is
+        first activated. The same instance is handed to every MoE wrapper's
+        set_mapping.
+        """
+        if self._moe_punica_wrapper is not None:
+            return self._moe_punica_wrapper
+        from vllm.platforms import current_platform
+
+        max_tokens = self._MOE_PUNICA_MAX_TOKENS
+        if current_platform.device_type == "npu":
+            from vllm_ascend.lora.punica_npu import PunicaWrapperNPU
+
+            punica = PunicaWrapperNPU(max_tokens, max_batches=1, device=self.device)
+        else:
+            from vllm.lora.punica_wrapper import get_punica_wrapper
+
+            punica = get_punica_wrapper(max_tokens, max_batches=1, device=self.device)
+        # Single adapter at slot 0: every token maps to slot 0. ``torch.empty``
+        # leaves _token_lora_indices uninitialized, so zero it explicitly. Set
+        # indices_len[0] to the full buffer; prepare_lora_indices narrows to the
+        # per-forward num_tokens. adapter_enabled[0] (toggled by suspend/resume)
+        # gates the on/off, so these indices stay all-zero across activations.
+        punica._token_lora_indices[:max_tokens] = 0
+        punica.indices_len[0] = max_tokens
+        self._moe_punica_wrapper = punica
+        return punica
+
+    def _publish_moe_lora_context(self) -> None:
+        """Publish the per-layer MoE LoRA context on every MoE wrapper.
+
+        Calls set_mapping(shared_punica) on each FusedMoEWithLoRA wrapper, which
+        builds the MoELoRAContext (referencing the stacked LoRA tensors and
+        adapter_enabled) and publishes it onto the base runner's routed_experts.
+        Dense wrappers are skipped: they override apply() to bypass the punica
+        and have no use for a MoELoRAContext.
+
+        Called on the full-bind activation path so the context references the
+        freshly bound tensors; re-called after _ensure_max_lora_rank re-creates
+        buffers (which would otherwise leave the context referencing stale
+        tensors).
+        """
+        from vllm.lora.layers.fused_moe import FusedMoEWithLoRA
+
+        moe_wrappers = [ll for ll in self._lora_modules.values() if isinstance(ll, FusedMoEWithLoRA)]
+        if not moe_wrappers:
+            return
+        punica = self._get_moe_punica_wrapper()
+        for lora_layer in moe_wrappers:
+            lora_layer.set_mapping(punica)
+        logger.debug("Published MoE LoRA context on %d wrapper(s)", len(moe_wrappers))
+
     def _activate_adapter(self, adapter_id: int, scale: float) -> None:
         if self._is_active_at_scale(adapter_id, scale):
             logger.debug("Adapter %d already active at scale %.3f skipping", adapter_id, scale)
@@ -1025,6 +1112,12 @@ class DiffusionLoRAManager:
         self._suspended_adapter_id = None
         try:
             self._bind_adapter_weights(lora_model, scale)
+            # Publish the per-layer MoE LoRA context so the bound weights are
+            # actually injected at forward time (see _publish_moe_lora_context).
+            # Re-called on every full bind because _ensure_max_lora_rank can
+            # re-allocate the stacked tensors, which would otherwise leave the
+            # published context referencing stale buffers.
+            self._publish_moe_lora_context()
         except Exception:
             self._reset_lora_layers()
             raise
