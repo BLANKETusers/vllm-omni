@@ -493,6 +493,15 @@ class DiffusionLoRAManager:
             # Collect replacements first to avoid mutating the module tree
             # while iterating over named_modules().
             pending_replacements: list[tuple[str, str, nn.Module, list[str]]] = []
+            # MoE runner bridge (F1): once a MoERunner is wrapped as
+            # FusedMoEWithLoRA its internal submodules move under ``base_layer``
+            # and their original named_modules paths no longer resolve, so we
+            # must not collect them for separate dense wrapping. Track collected
+            # runner paths (relative to the component) and skip their
+            # descendants. See RFC: Diffusion MoE LoRA Bridge (F1).
+            from vllm.model_executor.layers.fused_moe import MoERunner
+
+            moe_runner_module_names: set[str] = set()
 
             for module_name, module in component.named_modules(remove_duplicate=False):
                 # Don't recurse into already-replaced LoRA wrappers. Their
@@ -501,12 +510,36 @@ class DiffusionLoRAManager:
                 if isinstance(module, BaseLayerWithLoRA) or "base_layer" in module_name.split("."):
                     continue
 
+                # Skip the MoERunner itself once collected, and any descendant:
+                # the FusedMoEWithLoRA wrapper owns the whole runner, and
+                # wrapping an internal submodule (e.g. ``...experts.
+                # _shared_experts._layer.down_proj``) separately would both
+                # duplicate the direct ``...mlp.shared_mlp.*`` wrap and crash
+                # replace_submodule once the runner's children move under
+                # ``base_layer``.
+                if any(module_name == p or module_name.startswith(p + ".") for p in moe_runner_module_names):
+                    continue
+
                 full_module_name = f"{component_name}.{module_name}"
                 if full_module_name in self._lora_modules:
                     logger.debug("Layer %s already replaced, skipping", full_module_name)
                     continue
 
                 packed_modules_list = self._get_packed_modules_list(module)
+
+                # MoE runner bridge (F1): a MoERunner's leaf module name is the
+                # experts container (e.g. ``...mlp.experts``), not a projection
+                # name, so the dense ``target_modules`` name-match below would
+                # reject it and the runner would never be wrapped — leaving
+                # every routed-expert adapter unbound (bound=0/N). Detect the
+                # runner here and let it bypass that check when the adapter
+                # targets any of its expert projections; from_layer_diffusion
+                # then wraps it as FusedMoEWithLoRA. See RFC F1.
+                is_moe_runner = isinstance(module, MoERunner)
+                moe_runner_projs: list[str] | None = None
+                if is_moe_runner:
+                    moe_runner_projs = _moe_lora_proj_names(getattr(module, "moe_config", None))
+
                 if target_modules_pattern is not None or target_modules_list is not None:
                     should_replace = _matches_target(full_module_name)
                     if not should_replace and len(packed_modules_list) > 1:
@@ -518,9 +551,13 @@ class DiffusionLoRAManager:
                                 if _matches_target(sub_full_name):
                                     should_replace = True
                                     break
-
+                    if not should_replace and moe_runner_projs is not None:
+                        should_replace = any(_matches_target(proj) for proj in moe_runner_projs)
                     if not should_replace:
                         continue
+
+                if is_moe_runner:
+                    moe_runner_module_names.add(module_name)
 
                 pending_replacements.append((module_name, full_module_name, module, packed_modules_list))
 
@@ -655,20 +692,6 @@ class DiffusionLoRAManager:
         # activate weights in each LoRA layer
         for full_module_name, lora_layer in self._lora_modules.items():
             lora_weights = self._get_lora_weights(lora_model, full_module_name)
-            # TEMP DIAG: confirm MoE branch entry + wrapper type for bound=0.
-            from vllm.lora.layers.fused_moe import FusedMoEWithLoRA
-
-            _base = getattr(lora_layer, "base_layer", None)
-            logger.warning(
-                "BIND-DIAG %s: lora_layer=%s base_layer=%s is_MoEWrapper=%s base_is_MoERunner=%s lora_weights=%s",
-                full_module_name,
-                type(lora_layer).__name__,
-                type(_base).__name__ if _base is not None else None,
-                isinstance(lora_layer, FusedMoEWithLoRA),
-                _base.__class__.__name__ if _base is not None else None,
-                type(lora_weights).__name__ if lora_weights is not None else None,
-            )
-
             # MoE LoRA bridge (F3): a MoERunner-backed wrapper expects set_lora
             # to receive per-projection lists (w1=gate, w2=down, w3=up for
             # gated MoE) with expert-dim = local experts, already EP-sliced.
