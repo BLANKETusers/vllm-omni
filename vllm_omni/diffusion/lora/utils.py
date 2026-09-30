@@ -96,16 +96,27 @@ def from_layer_diffusion(
         instance = wrapper_cls(layer)
         instance.create_lora_weights(max_loras, lora_config, model_config)
         # F4 — runtime context forwarding: upstream FusedMoEWithLoRA.forward()
-        # only delegates to base_layer.forward(), so the runner's pre-hooks
-        # (num_tokens / DP metadata / NPU dispatch context, registered in
-        # FusedMoE.__new__) still fire when base_layer.forward is called.
-        # No explicit hook copy is needed; assert the runner still carries its
-        # pre-hooks so a future upstream change that strips them is caught.
+        # delegates to ``base_layer.forward(*args, **kwargs)`` directly. A
+        # direct ``.forward()`` call bypasses ``nn.Module.__call__``, so the
+        # runner's forward pre-hooks never fire. Those hooks are load-bearing:
+        # omni's ``_num_tokens_pre_hook`` sets ForwardContext.num_tokens, and
+        # on NPU ``fused_moe_forward_context_pre_hook`` installs
+        # ``moe_comm_method`` per-forward — without it the routed-experts
+        # forward crashes with "'NoneType' object has no attribute 'prepare'".
+        # Override the wrapper's forward to route through ``base_layer(...)``
+        # (i.e. ``__call__``) so the pre-hooks fire as intended. Assert the
+        # runner still carries its pre-hooks so a future upstream change that
+        # strips them is caught.
         assert len(layer._forward_pre_hooks) > 0, (
             "MoERunner lost its forward pre-hooks after LoRA wrapping; "
-            "ForwardContext.num_tokens / DP metadata would be uninitialized "
-            "(see RFC F4)."
+            "ForwardContext.num_tokens / NPU moe_comm_method would be "
+            "uninitialized (see RFC F4)."
         )
+
+        def _forward_via_base_call(self, *args, **kwargs):
+            return self.base_layer(*args, **kwargs)
+
+        instance.forward = _forward_via_base_call  # type: ignore[method-assign]
         return instance
 
     diffusion_lora_classes = [
