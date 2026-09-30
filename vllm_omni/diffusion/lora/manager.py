@@ -840,11 +840,47 @@ class DiffusionLoRAManager:
                 scale,
             )
 
-        unbound_lora_names = sorted(set(lora_model.loras) - bound_lora_names)
+        all_lora_names = set(lora_model.loras)
+        # EP-aware binding completeness: under Expert Parallel each rank owns
+        # only a contiguous slice of the routed experts, while the adapter
+        # checkpoint holds all global experts. Only this rank's local expert
+        # keys should be expected to bind; non-local expert keys are not this
+        # rank's responsibility and must be excluded from the unbound set, or
+        # every EP rank would flag the ~75% of experts it does not own.
+        # See RFC: Diffusion MoE LoRA Bridge — EP slicing (F3-bind).
+        from vllm.lora.layers.fused_moe import FusedMoEWithLoRA
+        from vllm.model_executor.layers.fused_moe import MoERunner
+
+        locally_expected_moe_names: set[str] = set()
+        for full_module_name, lora_layer in self._lora_modules.items():
+            base_layer = getattr(lora_layer, "base_layer", None)
+            if not isinstance(base_layer, MoERunner):
+                continue
+            if not isinstance(lora_layer, FusedMoEWithLoRA):
+                continue
+            local_num_experts = getattr(lora_layer, "local_num_experts", None)
+            if not local_num_experts:
+                continue
+            use_ep = bool(getattr(lora_layer, "use_ep", False))
+            ep_rank = getattr(lora_layer, "ep_rank", 0)
+            proj_names = _moe_lora_proj_names(getattr(base_layer, "moe_config", None))
+            for ei in range(local_num_experts):
+                global_ei = ep_rank * local_num_experts + ei if use_ep else ei
+                for proj in proj_names:
+                    cand = f"{full_module_name}.{global_ei}.{proj}"
+                    # Resolve to the PEFT namespace exactly as binding does.
+                    sub = self._get_lora_weights(lora_model, cand)
+                    if sub is not None:
+                        name = lora_names_by_id.get(id(sub))
+                        if name is not None:
+                            locally_expected_moe_names.add(name)
+        non_local_expert_names = {n for n in all_lora_names if ".experts." in n and n not in locally_expected_moe_names}
+        unbound_lora_names = sorted(all_lora_names - bound_lora_names - non_local_expert_names)
+        expected_count = len(all_lora_names) - len(non_local_expert_names)
         if not bound_lora_names or unbound_lora_names:
             raise ValueError(
                 f"LoRA adapter {lora_model.id} binding is incomplete: "
-                f"bound={len(bound_lora_names)}/{len(lora_model.loras)}, "
+                f"bound={len(bound_lora_names)}/{expected_count}, "
                 f"unbound modules={unbound_lora_names}; "
                 f"expected target modules in {sorted(self._expected_lora_modules)}"
             )
