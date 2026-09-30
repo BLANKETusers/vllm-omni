@@ -655,6 +655,19 @@ class DiffusionLoRAManager:
         # activate weights in each LoRA layer
         for full_module_name, lora_layer in self._lora_modules.items():
             lora_weights = self._get_lora_weights(lora_model, full_module_name)
+            # TEMP DIAG: confirm MoE branch entry + wrapper type for bound=0.
+            from vllm.lora.layers.fused_moe import FusedMoEWithLoRA
+
+            _base = getattr(lora_layer, "base_layer", None)
+            logger.warning(
+                "BIND-DIAG %s: lora_layer=%s base_layer=%s is_MoEWrapper=%s base_is_MoERunner=%s lora_weights=%s",
+                full_module_name,
+                type(lora_layer).__name__,
+                type(_base).__name__ if _base is not None else None,
+                isinstance(lora_layer, FusedMoEWithLoRA),
+                _base.__class__.__name__ if _base is not None else None,
+                type(lora_weights).__name__ if lora_weights is not None else None,
+            )
 
             # MoE LoRA bridge (F3): a MoERunner-backed wrapper expects set_lora
             # to receive per-projection lists (w1=gate, w2=down, w3=up for
