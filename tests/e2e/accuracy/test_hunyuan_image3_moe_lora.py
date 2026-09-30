@@ -36,11 +36,11 @@ from vllm_omni.lora.request import LoRARequest
 
 pytestmark = [pytest.mark.full_model, pytest.mark.diffusion]
 
-# PEFT logical projection names for a gated MoE, in upstream set_lora
-# [w1, w2, w3] order. gate_proj/up_proj share the hidden->intermediate shape;
-# down_proj is intermediate->hidden. Matches _moe_lora_proj_names in
+# PEFT projection names for a gated MoE's routed experts, in upstream
+# set_lora [w1, w2, w3] order. gate_proj/up_proj share the hidden->intermediate
+# shape; down_proj is intermediate->hidden. Matches _moe_lora_proj_names in
 # vllm_omni/diffusion/lora/manager.py.
-_EXPERT_PROJECTIONS = ("gate_proj", "up_proj", "down_proj")
+_EXPERT_PROJECTIONS = ("gate_proj", "down_proj", "up_proj")
 
 
 @hardware_test(res={"cuda": ["H100", "B200"], "npu": "A3"}, num_cards=4)
@@ -118,9 +118,9 @@ def test_hunyuan_image3_dit_moe_lora_generation(tmp_path: Path):
                     }
                 ],
                 # NPU (Ascend 910/A3) overrides: lower mem util + auto moe backend.
-                # Also makes NPUOmniPlatform.init_diffusion_worker_vllm_config fire
-                # refresh_all_lora_classes (F2) so AscendFusedMoEWithLoRA is
-                # selectable by _select_moe_lora_wrapper_cls (F1).
+                # init_diffusion_worker also fires refresh_all_lora_classes (F2),
+                # which keeps _all_lora_classes consistent for from_layer fallback
+                # paths; F1 selects the wrapper by direct import regardless.
                 "platforms": {
                     "npu": {
                         "stages": [

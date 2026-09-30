@@ -1026,37 +1026,37 @@ class DiffusionLoRAManager:
     # wrapper) gates whether the delta is actually applied.
 
     _MOE_PUNICA_MAX_TOKENS = 65536
-    # Covers up to ~4096x4096 latent patches (each patch = 1 MoE token). The
-    # per-forward token count is always <= this; prepare_lora_indices narrows
-    # token_lora_indices down to the actual num_tokens, so a larger buffer is
-    # just unused tail. Raise only if a resolution exceeding this is needed.
+    # Covers up to a 4096x4096 image (256x256 = 65536 latent patches, each a MoE
+    # token). prepare_lora_indices narrows to the per-forward num_tokens, so a
+    # larger buffer is just unused tail. Raise only if a larger resolution is
+    # needed.
 
     def _get_moe_punica_wrapper(self):
         """Lazily create the shared punica wrapper for the MoE LoRA path.
 
-        Dense diffusion LoRA layers bypass the punica (they override apply()
-        to use direct matmul), so this is only created when a MoE adapter is
-        first activated. The same instance is handed to every MoE wrapper's
-        set_mapping.
+        Dense layers bypass punica (they override apply() with direct matmul),
+        so this is only created when a MoE adapter is first activated. The same
+        instance is handed to every MoE wrapper's set_mapping.
         """
         if self._moe_punica_wrapper is not None:
             return self._moe_punica_wrapper
-        from vllm.platforms import current_platform
+        from vllm.lora.config import LoRAConfig
+        from vllm.lora.punica_wrapper import get_punica_wrapper
 
+        # GPU's PunicaWrapperGPU requires lora_config (kwargs["lora_config"]);
+        # NPU's PunicaWrapperNPU treats it as optional. Pass it on both.
+        lora_config = LoRAConfig(
+            max_lora_rank=self._max_lora_rank,
+            max_loras=1,
+            max_cpu_loras=self.max_cached_adapters,
+            lora_dtype=self.dtype,
+            fully_sharded_loras=False,
+        )
         max_tokens = self._MOE_PUNICA_MAX_TOKENS
-        if current_platform.device_type == "npu":
-            from vllm_ascend.lora.punica_npu import PunicaWrapperNPU
-
-            punica = PunicaWrapperNPU(max_tokens, max_batches=1, device=self.device)
-        else:
-            from vllm.lora.punica_wrapper import get_punica_wrapper
-
-            punica = get_punica_wrapper(max_tokens, max_batches=1, device=self.device)
-        # Single adapter at slot 0: every token maps to slot 0. ``torch.empty``
-        # leaves _token_lora_indices uninitialized, so zero it explicitly. Set
-        # indices_len[0] to the full buffer; prepare_lora_indices narrows to the
-        # per-forward num_tokens. adapter_enabled[0] (toggled by suspend/resume)
-        # gates the on/off, so these indices stay all-zero across activations.
+        punica = get_punica_wrapper(max_tokens, max_batches=1, device=self.device, lora_config=lora_config)
+        # Single adapter at slot 0: zero _token_lora_indices (torch.empty leaves
+        # it uninitialized) and set indices_len[0] to the full buffer;
+        # prepare_lora_indices narrows to the per-forward num_tokens.
         punica._token_lora_indices[:max_tokens] = 0
         punica.indices_len[0] = max_tokens
         self._moe_punica_wrapper = punica

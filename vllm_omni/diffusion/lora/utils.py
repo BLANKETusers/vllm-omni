@@ -23,9 +23,8 @@ from vllm_omni.diffusion.lora.layers import (
 def _select_moe_lora_wrapper_cls() -> type:
     """Pick the MoE LoRA wrapper class for the current platform.
 
-    GPU/CUDA reuses upstream vLLM's native ``FusedMoEWithLoRA``. NPU requires
-    ``AscendFusedMoEWithLoRA`` from vllm-ascend, which must have been
-    registered via ``refresh_all_lora_classes`` at platform init.
+    GPU reuses upstream vLLM's native ``FusedMoEWithLoRA``. NPU uses
+    ``AscendFusedMoEWithLoRA`` from vllm-ascend, imported directly here.
     """
     if current_platform.device_type == "npu":
         from vllm_ascend.lora.fused_moe import AscendFusedMoEWithLoRA
