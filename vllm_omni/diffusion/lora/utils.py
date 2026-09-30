@@ -25,8 +25,7 @@ def _select_moe_lora_wrapper_cls() -> type:
 
     GPU/CUDA reuses upstream vLLM's native ``FusedMoEWithLoRA``. NPU requires
     ``AscendFusedMoEWithLoRA`` from vllm-ascend, which must have been
-    registered via ``refresh_all_lora_classes`` at platform init (F2).
-    See RFC: Diffusion MoE LoRA Bridge — HunyuanImage3 Baseline (F1/F2).
+    registered via ``refresh_all_lora_classes`` at platform init.
     """
     if current_platform.device_type == "npu":
         from vllm_ascend.lora.fused_moe import AscendFusedMoEWithLoRA
@@ -83,19 +82,18 @@ def from_layer_diffusion(
     """
     Diffusion-specific layer replacement. similar to vLLM's `from_layer`
     """
-    # MoE runner bridge (F1): upstream vLLM's FusedMoEWithLoRA (GPU) /
+    # MoE runner bridge: upstream vLLM's FusedMoEWithLoRA (GPU) /
     # vllm-ascend's AscendFusedMoEWithLoRA (NPU) already wrap MoERunner. The
     # diffusion manager only needs to select the platform wrapper and call it
     # directly — omni does not maintain a second MoE LoRA compute. The MoE
     # wrapper carries its own target semantics (gate_up_proj/down_proj), so
     # packed_modules_list is irrelevant here; the branch must come before the
     # dense classes so a MoERunner is not mistaken for a dense linear.
-    # See RFC: Diffusion MoE LoRA Bridge — HunyuanImage3 Baseline (F1).
     if isinstance(layer, MoERunner):
         wrapper_cls = _select_moe_lora_wrapper_cls()
         instance = wrapper_cls(layer)
         instance.create_lora_weights(max_loras, lora_config, model_config)
-        # F4 — runtime context forwarding: upstream FusedMoEWithLoRA.forward()
+        # Runtime context forwarding: upstream FusedMoEWithLoRA.forward()
         # delegates to ``base_layer.forward(*args, **kwargs)`` directly. A
         # direct ``.forward()`` call bypasses ``nn.Module.__call__``, so the
         # runner's forward pre-hooks never fire. Those hooks are load-bearing:
@@ -110,7 +108,7 @@ def from_layer_diffusion(
         assert len(layer._forward_pre_hooks) > 0, (
             "MoERunner lost its forward pre-hooks after LoRA wrapping; "
             "ForwardContext.num_tokens / NPU moe_comm_method would be "
-            "uninitialized (see RFC F4)."
+            "uninitialized."
         )
 
         def _forward_via_base_call(self, *args, **kwargs):

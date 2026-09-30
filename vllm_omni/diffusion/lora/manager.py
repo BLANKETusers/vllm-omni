@@ -38,7 +38,7 @@ def _moe_lora_proj_names(moe_config: object | None) -> list[str]:
 
     Single source of truth shared by the expected-modules whitelist (built
     before checkpoint loading) and the per-expert gather in
-    ``_bind_moe_adapter_weights`` (F3-bind), so the two can never drift.
+    ``_bind_moe_adapter_weights``, so the two can never drift.
 
     For a gated MoE (``is_act_and_mul=True``) the PEFT checkpoint stores
     ``gate_proj`` / ``down_proj`` / ``up_proj`` per expert, mapped to upstream's
@@ -119,8 +119,7 @@ class DiffusionLoRAManager:
         # MoE expert keys are checked against expected_lora_modules by an
         # *indexed* suffix (``experts.{i}.{proj}``), not a bare proj name, so
         # the model's packed/stacked mapping cannot whitelist them. Enumerate
-        # them directly from every MoERunner before layer replacement. See
-        # RFC: Diffusion MoE LoRA Bridge — HunyuanImage3 Baseline (F3-load).
+        # them directly from every MoERunner before layer replacement.
         self._expected_lora_modules = self._expand_expected_modules_for_moe(self._expected_lora_modules)
 
         # LRU-style cache management
@@ -260,9 +259,10 @@ class DiffusionLoRAManager:
         We enumerate ``experts.{i}.{proj}`` for every *global* expert directly
         from each ``MoERunner`` in the pipeline (the checkpoint holds all global
         experts; omni does not pass ``moe_ep_spec`` to ``from_local_checkpoint``,
-        so EP slicing happens later in F3-bind, not at load time). Must run
-        before layer replacement, while the bare runner instances are still
-        reachable via ``named_modules``. Proj names are shared with
+        so EP slicing happens later in ``_bind_moe_adapter_weights``, not at
+        load time). Must run before layer replacement, while the bare runner
+        instances are still reachable via ``named_modules``. Proj names are
+        shared with
         ``_bind_moe_adapter_weights`` via ``_moe_lora_proj_names``.
         """
         expanded = set(expected)
@@ -493,12 +493,11 @@ class DiffusionLoRAManager:
             # Collect replacements first to avoid mutating the module tree
             # while iterating over named_modules().
             pending_replacements: list[tuple[str, str, nn.Module, list[str]]] = []
-            # MoE runner bridge (F1): once a MoERunner is wrapped as
-            # FusedMoEWithLoRA its internal submodules move under ``base_layer``
-            # and their original named_modules paths no longer resolve, so we
-            # must not collect them for separate dense wrapping. Track collected
-            # runner paths (relative to the component) and skip their
-            # descendants. See RFC: Diffusion MoE LoRA Bridge (F1).
+            # Once a MoERunner is wrapped as FusedMoEWithLoRA its internal
+            # submodules move under ``base_layer`` and their original
+            # named_modules paths no longer resolve, so we must not collect
+            # them for separate dense wrapping. Track collected runner paths
+            # (relative to the component) and skip their descendants.
             from vllm.model_executor.layers.fused_moe import MoERunner
 
             moe_runner_module_names: set[str] = set()
@@ -527,14 +526,14 @@ class DiffusionLoRAManager:
 
                 packed_modules_list = self._get_packed_modules_list(module)
 
-                # MoE runner bridge (F1): a MoERunner's leaf module name is the
-                # experts container (e.g. ``...mlp.experts``), not a projection
-                # name, so the dense ``target_modules`` name-match below would
-                # reject it and the runner would never be wrapped — leaving
-                # every routed-expert adapter unbound (bound=0/N). Detect the
-                # runner here and let it bypass that check when the adapter
-                # targets any of its expert projections; from_layer_diffusion
-                # then wraps it as FusedMoEWithLoRA. See RFC F1.
+                # A MoERunner's leaf module name is the experts container
+                # (e.g. ``...mlp.experts``), not a projection name, so the
+                # dense ``target_modules`` name-match below would reject it and
+                # the runner would never be wrapped — leaving every
+                # routed-expert adapter unbound (bound=0/N). Detect the runner
+                # here and let it bypass that check when the adapter targets
+                # any of its expert projections; from_layer_diffusion then
+                # wraps it as FusedMoEWithLoRA.
                 is_moe_runner = isinstance(module, MoERunner)
                 moe_runner_projs: list[str] | None = None
                 if is_moe_runner:
@@ -692,13 +691,12 @@ class DiffusionLoRAManager:
         # activate weights in each LoRA layer
         for full_module_name, lora_layer in self._lora_modules.items():
             lora_weights = self._get_lora_weights(lora_model, full_module_name)
-            # MoE LoRA bridge (F3): a MoERunner-backed wrapper expects set_lora
-            # to receive per-projection lists (w1=gate, w2=down, w3=up for
-            # gated MoE) with expert-dim = local experts, already EP-sliced.
-            # Unlike dense packed layers, the adapter is stored per-expert
+            # A MoERunner-backed wrapper expects set_lora to receive
+            # per-projection lists (w1=gate, w2=down, w3=up for gated MoE)
+            # with expert-dim = local experts, already EP-sliced. Unlike dense
+            # packed layers, the adapter is stored per-expert
             # (experts.{i}.gate_proj / up_proj / down_proj), so we must
-            # gather+stack across experts here. See RFC: Diffusion MoE LoRA
-            # Bridge — HunyuanImage3 Baseline (F3).
+            # gather+stack across experts here.
             if self._bind_moe_adapter_weights(
                 full_module_name=full_module_name,
                 lora_layer=lora_layer,
@@ -847,7 +845,6 @@ class DiffusionLoRAManager:
         # keys should be expected to bind; non-local expert keys are not this
         # rank's responsibility and must be excluded from the unbound set, or
         # every EP rank would flag the ~75% of experts it does not own.
-        # See RFC: Diffusion MoE LoRA Bridge — EP slicing (F3-bind).
         from vllm.lora.layers.fused_moe import FusedMoEWithLoRA
         from vllm.model_executor.layers.fused_moe import MoERunner
 
@@ -900,7 +897,7 @@ class DiffusionLoRAManager:
         scale: float,
         bound_lora_names_cb,
     ) -> bool:
-        """Bind a MoERunner-backed LoRA wrapper (F3).
+        """Bind a MoERunner-backed LoRA wrapper.
 
         Returns True if ``lora_layer`` is a MoE LoRA wrapper and binding was
         handled (including ``reset_lora`` when no matching adapter is found);
@@ -942,7 +939,7 @@ class DiffusionLoRAManager:
         ep_rank = getattr(lora_layer, "ep_rank", 0)
         is_gated = bool(getattr(moe_config, "is_act_and_mul", True))
         # PEFT logical projection names for routed experts, single-sourced with
-        # the expected-modules whitelist (F3-load) via _moe_lora_proj_names.
+        # the expected-modules whitelist via _moe_lora_proj_names.
         proj_names = _moe_lora_proj_names(moe_config)  # [w1, w2, w3]
 
         prefix = full_module_name
