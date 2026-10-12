@@ -1040,7 +1040,6 @@ class DiffusionLoRAManager:
         """
         if self._moe_punica_wrapper is not None:
             return self._moe_punica_wrapper
-        from vllm.lora.config import LoRAConfig
         from vllm.lora.punica_wrapper import get_punica_wrapper
 
         # GPU's PunicaWrapperGPU requires lora_config (kwargs["lora_config"]);

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import torch
 import torch.nn as nn
 from transformers import PretrainedConfig
 from vllm.config.lora import LoRAConfig
@@ -31,6 +32,48 @@ def _select_moe_lora_wrapper_cls() -> type:
 
         return AscendFusedMoEWithLoRA
     return FusedMoEWithLoRA
+
+
+def _move_moe_lora_buffers(instance: FusedMoEWithLoRA, device: torch.device) -> None:
+    """Keep MoE LoRA sidecars resident while DLO moves base weights.
+
+    The upstream wrapper keeps the per-expert matrices in separate W13 and W2
+    stacks. ``lora_a_stacked`` / ``lora_b_stacked`` are views into those
+    tensors, so regenerate them after moving the source stacks.
+    """
+    for attr in (
+        "w13_lora_a_stacked",
+        "w13_lora_b_stacked",
+        "w2_lora_a_stacked",
+        "w2_lora_b_stacked",
+    ):
+        buffers = getattr(instance, attr)
+        setattr(instance, attr, tuple(buffer.to(device=device) for buffer in buffers))
+    instance.adapter_enabled = instance.adapter_enabled.to(device=device)
+
+    lora_a_stacked: list[torch.Tensor] = []
+    lora_b_stacked: list[torch.Tensor] = []
+    for lora_id in range(instance.max_loras):
+        for expert_id in range(instance.local_num_experts):
+            w13_a_expert_id = 0 if instance.enable_moe_shared_loras else expert_id
+            w2_b_expert_id = 0 if instance.enable_moe_shared_loras else expert_id
+            lora_a_stacked.extend(
+                (
+                    instance.w13_lora_a_stacked[0][lora_id][w13_a_expert_id],
+                    instance.w2_lora_a_stacked[0][lora_id][expert_id],
+                )
+            )
+            lora_b_stacked.extend(
+                (
+                    instance.w13_lora_b_stacked[0][lora_id][expert_id],
+                    instance.w2_lora_b_stacked[0][lora_id][w2_b_expert_id],
+                )
+            )
+            if instance._w13_slices == 2:
+                lora_a_stacked.append(instance.w13_lora_a_stacked[1][lora_id][w13_a_expert_id])
+                lora_b_stacked.append(instance.w13_lora_b_stacked[1][lora_id][expert_id])
+    instance.lora_a_stacked = lora_a_stacked
+    instance.lora_b_stacked = lora_b_stacked
 
 
 def _match_target_modules(module_name: str, target_modules: list[str]) -> bool:
@@ -91,6 +134,20 @@ def from_layer_diffusion(
     if isinstance(layer, MoERunner):
         wrapper_cls = _select_moe_lora_wrapper_cls()
         instance = wrapper_cls(layer)
+        buffer_device: list[torch.device | None] = [None]
+        original_create_lora_weights = instance.create_lora_weights
+
+        def _set_diffusion_lora_buffer_device(device: torch.device) -> None:
+            buffer_device[0] = device
+            _move_moe_lora_buffers(instance, device)
+
+        def _create_lora_weights(max_loras, lora_config, model_config=None) -> None:
+            original_create_lora_weights(max_loras, lora_config, model_config)
+            if buffer_device[0] is not None:
+                _move_moe_lora_buffers(instance, buffer_device[0])
+
+        instance._set_diffusion_lora_buffer_device = _set_diffusion_lora_buffer_device  # type: ignore[method-assign]
+        instance.create_lora_weights = _create_lora_weights  # type: ignore[method-assign]
         instance.create_lora_weights(max_loras, lora_config, model_config)
         # Runtime context forwarding: upstream FusedMoEWithLoRA.forward()
         # delegates to ``base_layer.forward(*args, **kwargs)`` directly. A

@@ -203,6 +203,42 @@ def test_lora_manager_keeps_dlo_lora_buffers_on_compute_device(monkeypatch):
     assert pipeline.transformer.foo.lora_buffer_device == torch.device("cpu")
 
 
+def test_move_moe_lora_buffers_keeps_all_stacks_and_views_on_device():
+    from vllm_omni.diffusion.lora.utils import _move_moe_lora_buffers
+
+    wrapper = SimpleNamespace(
+        max_loras=1,
+        local_num_experts=2,
+        enable_moe_shared_loras=False,
+        _w13_slices=2,
+        w13_lora_a_stacked=(torch.ones((1, 2, 3, 4)), torch.ones((1, 2, 3, 4))),
+        w13_lora_b_stacked=(torch.ones((1, 2, 5, 3)), torch.ones((1, 2, 5, 3))),
+        w2_lora_a_stacked=(torch.ones((1, 2, 3, 5)),),
+        w2_lora_b_stacked=(torch.ones((1, 2, 4, 3)),),
+        adapter_enabled=torch.ones(2, dtype=torch.int),
+    )
+
+    _move_moe_lora_buffers(wrapper, torch.device("meta"))  # type: ignore[arg-type]
+
+    for stacks in (
+        wrapper.w13_lora_a_stacked,
+        wrapper.w13_lora_b_stacked,
+        wrapper.w2_lora_a_stacked,
+        wrapper.w2_lora_b_stacked,
+    ):
+        assert all(tensor.device.type == "meta" for tensor in stacks)
+    assert wrapper.adapter_enabled.device.type == "meta"
+    assert len(wrapper.lora_a_stacked) == len(wrapper.lora_b_stacked) == 6
+    assert [tensor.shape for tensor in wrapper.lora_a_stacked] == [
+        (3, 4),
+        (3, 5),
+        (3, 4),
+        (3, 4),
+        (3, 5),
+        (3, 4),
+    ]
+
+
 def test_lora_manager_replaces_packed_layer_when_targeting_sublayers(monkeypatch):
     import vllm_omni.diffusion.lora.manager as manager_mod
 
