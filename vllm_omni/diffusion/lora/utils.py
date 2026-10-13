@@ -135,13 +135,30 @@ def from_layer_diffusion(
         wrapper_cls = _select_moe_lora_wrapper_cls()
         instance = wrapper_cls(layer)
         buffer_device: list[torch.device | None] = [None]
+        _suspended: list[int | None] = [None]
         original_create_lora_weights = instance.create_lora_weights
+        original_set_lora = instance.set_lora
+        original_reset_lora = instance.reset_lora
+
+        def _set_lora(*args, **kwargs) -> None:
+            _suspended[0] = None
+            original_set_lora(*args, **kwargs)
+
+        def _reset_lora(*args, **kwargs) -> None:
+            _suspended[0] = None
+            original_reset_lora(*args, **kwargs)
+
+        # Saved enablement belongs to the current upload only. Rebinding,
+        # resetting or reallocating invalidates it, just like dense wrappers.
+        instance.set_lora = _set_lora  # type: ignore[method-assign]
+        instance.reset_lora = _reset_lora  # type: ignore[method-assign]
 
         def _set_diffusion_lora_buffer_device(device: torch.device) -> None:
             buffer_device[0] = device
             _move_moe_lora_buffers(instance, device)
 
         def _create_lora_weights(max_loras, lora_config, model_config=None) -> None:
+            _suspended[0] = None
             original_create_lora_weights(max_loras, lora_config, model_config)
             if buffer_device[0] is not None:
                 _move_moe_lora_buffers(instance, buffer_device[0])
@@ -195,8 +212,6 @@ def from_layer_diffusion(
         # param for the same descriptor reason as ``forward`` above: an
         # instance-attribute function is not descriptor-bound, and the manager
         # calls these with no positional args.
-        _suspended: list[int | None] = [None]
-
         def _suspend_lora() -> None:
             if _suspended[0] is not None:
                 return

@@ -855,7 +855,7 @@ class DiffusionLoRAManager:
         from vllm.lora.layers.fused_moe import FusedMoEWithLoRA
         from vllm.model_executor.layers.fused_moe import MoERunner
 
-        locally_expected_moe_names: set[str] = set()
+        non_local_expert_names: set[str] = set()
         for full_module_name, lora_layer in self._lora_modules.items():
             base_layer = getattr(lora_layer, "base_layer", None)
             if not isinstance(base_layer, MoERunner):
@@ -865,11 +865,15 @@ class DiffusionLoRAManager:
             local_num_experts = getattr(lora_layer, "local_num_experts", None)
             if not local_num_experts:
                 continue
-            use_ep = bool(getattr(lora_layer, "use_ep", False))
+            if not getattr(lora_layer, "use_ep", False):
+                continue
             ep_rank = getattr(lora_layer, "ep_rank", 0)
+            global_num_experts = lora_layer.global_num_experts
+            local_start = ep_rank * local_num_experts
             proj_names = _moe_lora_proj_names(getattr(base_layer, "moe_config", None))
-            for ei in range(local_num_experts):
-                global_ei = ep_rank * local_num_experts + ei if use_ep else ei
+            for global_ei in range(global_num_experts):
+                if local_start <= global_ei < local_start + local_num_experts:
+                    continue
                 for proj in proj_names:
                     cand = f"{full_module_name}.{global_ei}.{proj}"
                     # Resolve to the PEFT namespace exactly as binding does.
@@ -877,11 +881,13 @@ class DiffusionLoRAManager:
                     if sub is not None:
                         name = lora_names_by_id.get(id(sub))
                         if name is not None:
-                            locally_expected_moe_names.add(name)
-        non_local_expert_names = {n for n in all_lora_names if ".experts." in n and n not in locally_expected_moe_names}
+                            non_local_expert_names.add(name)
+        non_local_expert_names -= bound_lora_names
         unbound_lora_names = sorted(all_lora_names - bound_lora_names - non_local_expert_names)
         expected_count = len(all_lora_names) - len(non_local_expert_names)
-        if not bound_lora_names or unbound_lora_names:
+        # A sparse adapter can target only remote experts on this rank. That
+        # is a valid local no-op, unlike an empty or wholly unmatched adapter.
+        if not all_lora_names or unbound_lora_names or (expected_count and not bound_lora_names):
             raise ValueError(
                 f"LoRA adapter {lora_model.id} binding is incomplete: "
                 f"bound={len(bound_lora_names)}/{expected_count}, "
@@ -919,11 +925,11 @@ class DiffusionLoRAManager:
         with each tensor's expert-dim equal to ``local_num_experts`` and already
         EP-sliced. PEFT checkpoints store these per expert
         (``experts.{i}.gate_proj`` / ``up_proj`` / ``down_proj``), so this
-        method gathers them across local experts, stacks, applies scale, and
-        calls ``set_lora``. Non-gated MoE (``is_act_and_mul=False``) uses a
-        single w13 slice and a placeholder w3 — handled by upstream via
-        ``_w13_slices``; we always pass 3 entries and let upstream ignore w3
-        when ``_w13_slices == 1``.
+        method gathers them across local experts, zero-fills missing factors,
+        stacks, applies scale, and calls ``set_lora``. Non-gated MoE
+        (``is_act_and_mul=False``) uses a single w13 slice and a placeholder
+        w3 — handled by upstream via ``_w13_slices``; we always pass 3 entries
+        and let upstream ignore w3 when ``_w13_slices == 1``.
 
         EP slicing: the routed expert layout is contiguous per rank, so we
         narrow to ``[ep_rank * local : (ep_rank+1) * local]`` when the source
@@ -978,15 +984,25 @@ class DiffusionLoRAManager:
             lora_layer.reset_lora(0)
             return True
 
-        lora_a_list: list = []
-        lora_b_list: list = []
-        for factors in per_proj:
-            if not factors or all(f is None for f in factors):
-                lora_a_list.append(None)
-                lora_b_list.append(None)
-                continue
-            a_stack = torch.stack([f[0] for f in factors], dim=0)
-            b_stack = torch.stack([f[1] for f in factors], dim=0)
+        # Upstream set_lora requires tensors for every slot, even when an
+        # adapter targets only down_proj or a subset of experts. Build zeros
+        # in checkpoint (global TP) dimensions; upstream slices them normally.
+        reference_a, reference_b = next(f for factors in per_proj for f in factors if f is not None)
+        hidden = lora_layer.hidden_size
+        intermediate = lora_layer.intermediate_size_per_partition * lora_layer.tp_size
+        lora_a_list: list[torch.Tensor] = []
+        lora_b_list: list[torch.Tensor] = []
+        for proj, factors in zip(proj_names, per_proj):
+            template = next((f for f in factors if f is not None), None)
+            if template is None:
+                rank = reference_a.shape[0]
+                in_features, out_features = (intermediate, hidden) if proj == "down_proj" else (hidden, intermediate)
+                zero_a = reference_a.new_zeros((rank, in_features))
+                zero_b = reference_b.new_zeros((out_features, rank))
+            else:
+                zero_a, zero_b = (torch.zeros_like(t) for t in template)
+            a_stack = torch.stack([zero_a if f is None else f[0] for f in factors], dim=0)
+            b_stack = torch.stack([zero_b if f is None else f[1] for f in factors], dim=0)
             lora_a_list.append(a_stack)
             lora_b_list.append(b_stack * scale)
 
