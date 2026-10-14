@@ -1,18 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
-"""HI3 DiT MoE-expert LoRA generation (RFC: Diffusion MoE LoRA Bridge).
+"""Validate HunyuanImage3 routed-expert LoRA with a synthetic PEFT adapter.
 
-Stage 0/1 validation for the MoE LoRA bridge: a synthetic PEFT adapter that
-targets the *routed expert* projections (``gate_proj`` / ``up_proj`` /
-``down_proj``) rather than the dense attention projections, exercising the
-F1/F3 path that was previously unreachable (``check_unexpected_modules``
-rejected expert keys before F3 could run).
-
-Mirrors ``test_hunyuan_image3_lora.py``'s five-stage assertion, swapping the
-target modules for the routed-expert projections. Generates the adapter on
-disk from the model's ``hidden_size`` / ``moe_intermediate_size`` / ``num_experts``
-so it can be fed to a real run on 4x GPU (H100/B200) or NPU.
-
+Check activation, suspension, reactivation and zero-scale output.
 Run with --run-level full_model on four GPUs with at least 80 GiB each.
 """
 
@@ -36,19 +26,13 @@ from vllm_omni.lora.request import LoRARequest
 
 pytestmark = [pytest.mark.full_model, pytest.mark.diffusion]
 
-# PEFT projection names for a gated MoE's routed experts, in upstream
-# set_lora [w1, w2, w3] order. gate_proj/up_proj share the hidden->intermediate
-# shape; down_proj is intermediate->hidden. Matches _moe_lora_proj_names in
-# vllm_omni/diffusion/lora/manager.py.
+# Gated MoE projections in upstream [w1, w2, w3] order.
 _EXPERT_PROJECTIONS = ("gate_proj", "down_proj", "up_proj")
 
 
 @hardware_test(res={"cuda": ["H100", "B200"], "npu": "A3"}, num_cards=4)
 def test_hunyuan_image3_dit_moe_lora_generation(tmp_path: Path):
-    # Local path wins over the HF repo id, so the test never blocks on a
-    # network download of the multi-GB base weights. Mirrors the env var used
-    # by test_hunyuan_image3_pixel_accuracy.
-    #   HUNYUAN_IMAGE3_MODEL=/data/models/HunyuanImage-3.0-Instruct pytest ...
+    # Set HUNYUAN_IMAGE3_MODEL to use local weights instead of the HF repository.
     model = os.environ.get("HUNYUAN_IMAGE3_MODEL", "tencent/HunyuanImage-3.0-Instruct")
     config_path = Path(model) / "config.json"
     if config_path.is_file():
@@ -69,11 +53,7 @@ def test_hunyuan_image3_dit_moe_lora_generation(tmp_path: Path):
     adapter_dir = tmp_path / "adapter"
     adapter_dir.mkdir()
     tensors = {}
-    # Target routed experts in a couple of MoE layers. The component attribute
-    # is "model" (_dit_modules=["model"]), so the PEFT key path is
-    # base_model.model.model.layers.{i}.mlp.experts.{j}.{proj} (double "model":
-    # the PEFT prefix + the omni component name). This matches the existing
-    # dense test's base_model.model.model.layers.{i}.self_attn.* naming.
+    # Double "model" combines the PEFT prefix and the pipeline component name.
     for layer in (0, 1):
         for ei in range(num_experts):
             for proj in _EXPERT_PROJECTIONS:
@@ -117,10 +97,7 @@ def test_hunyuan_image3_dit_moe_lora_generation(tmp_path: Path):
                         "parallel_config": {"tensor_parallel_size": tp},
                     }
                 ],
-                # NPU (Ascend 910/A3) overrides: lower mem util + auto moe backend.
-                # init_diffusion_worker also fires refresh_all_lora_classes (F2),
-                # which keeps _all_lora_classes consistent for from_layer fallback
-                # paths; F1 selects the wrapper by direct import regardless.
+                # Exercise expert parallelism on NPU.
                 "platforms": {
                     "npu": {
                         "stages": [
@@ -172,9 +149,7 @@ def test_hunyuan_image3_dit_moe_lora_generation(tmp_path: Path):
         restored = generate("restored")
         repeated = generate("repeated", request)
         zero_scale = generate("zero_scale", request, scale=0.0)
-        # The defining proof the bridge actually applied: adapted must differ
-        # from baseline. Before F3-load this raised at load time; after the
-        # fix it must instead produce a real (non-base) image.
+        # Verify that routed-expert LoRA changes the generated image.
         assert np.abs(adapted.astype(float) - baseline).mean() > 0.1
         np.testing.assert_array_equal(restored, baseline)
         np.testing.assert_array_equal(repeated, adapted)

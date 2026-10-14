@@ -109,14 +109,7 @@ class NPUOmniPlatform(OmniPlatform, NPUPlatform):
         adapt_patch()
         init_ascend_config(vllm_config)
 
-        # Register Ascend MoE LoRA wrappers (F2). The diffusion bridge selects
-        # AscendFusedMoEWithLoRA directly by import in
-        # ``_select_moe_lora_wrapper_cls`` (F1), so this registration is not
-        # strictly required for the diffusion path; it keeps the global
-        # ``_all_lora_classes`` consistent with upstream NPUWorker behavior so
-        # any code path that falls back to vLLM's ``from_layer`` also picks the
-        # Ascend MoE wrapper.
-        # See RFC: Diffusion MoE LoRA Bridge — HunyuanImage3 Baseline (F2).
+        # Register Ascend LoRA classes for generic vLLM from_layer paths.
         from vllm_ascend.lora.utils import refresh_all_lora_classes
 
         refresh_all_lora_classes()
