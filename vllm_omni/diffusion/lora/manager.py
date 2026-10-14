@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 from vllm.config.lora import LoRAConfig, MaxLoRARanks
 from vllm.logger import init_logger
-from vllm.lora.layers import BaseLayerWithLoRA
+from vllm.lora.layers import BaseLayerWithLoRA, LoRAMapping
 from vllm.lora.lora_model import LoRAModel
 from vllm.lora.lora_weights import LoRALayerWeights, PackedLoRALayerWeights
 from vllm.lora.peft_helper import PEFTHelper
@@ -43,6 +43,20 @@ def _moe_lora_proj_names(moe_config: object | None) -> list[str]:
     if is_gated:
         return ["gate_proj", "down_proj", "up_proj"]
     return ["up_proj", "down_proj", "up_proj"]
+
+
+def _moe_lora_target_names(full_module_name: str, module: nn.Module) -> list[str]:
+    projections = list(dict.fromkeys(_moe_lora_proj_names(getattr(module, "moe_config", None))))
+    global_num_experts = getattr(module, "global_num_experts", None)
+    if global_num_experts is None:
+        global_num_experts = getattr(getattr(module, "moe_config", None), "num_experts", 0)
+    if not global_num_experts:
+        return projections
+    return [
+        f"{full_module_name}.{expert_id}.{projection}"
+        for expert_id in range(global_num_experts)
+        for projection in projections
+    ]
 
 
 class LoRABackend(str, Enum):
@@ -494,9 +508,9 @@ class DiffusionLoRAManager:
 
                 # Match MoE targets by logical projection names, not the runner name.
                 is_moe_runner = isinstance(module, MoERunner)
-                moe_runner_projs: list[str] | None = None
+                moe_target_names: list[str] | None = None
                 if is_moe_runner:
-                    moe_runner_projs = _moe_lora_proj_names(getattr(module, "moe_config", None))
+                    moe_target_names = _moe_lora_target_names(full_module_name, module)
 
                 if target_modules_pattern is not None or target_modules_list is not None:
                     should_replace = _matches_target(full_module_name)
@@ -509,8 +523,8 @@ class DiffusionLoRAManager:
                                 if _matches_target(sub_full_name):
                                     should_replace = True
                                     break
-                    if not should_replace and moe_runner_projs is not None:
-                        should_replace = any(_matches_target(proj) for proj in moe_runner_projs)
+                    if not should_replace and moe_target_names is not None:
+                        should_replace = any(_matches_target(name) for name in moe_target_names)
                     if not should_replace:
                         continue
 
@@ -955,9 +969,12 @@ class DiffusionLoRAManager:
         )
         max_tokens = self._MOE_PUNICA_MAX_TOKENS
         punica = get_punica_wrapper(max_tokens, max_batches=1, device=self.device, lora_config=lora_config)
-        # All tokens use slot 0; initialize the otherwise uninitialized index buffer.
-        punica._token_lora_indices[:max_tokens] = 0
-        punica.indices_len[0] = max_tokens
+        mapping = LoRAMapping(
+            index_mapping=(1,) * max_tokens,
+            prompt_mapping=(1,),
+            is_prefill=False,
+        )
+        punica.update_metadata(mapping, [1], 1, 0)
         self._moe_punica_wrapper = punica
         return punica
 

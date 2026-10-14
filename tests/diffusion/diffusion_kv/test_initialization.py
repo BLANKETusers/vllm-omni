@@ -216,6 +216,35 @@ def test_dense_config_keeps_new_paged_sizing_inputs_inactive() -> None:
     assert vllm_config.scheduler_config.max_num_batched_tokens == original_token_budget
 
 
+@pytest.mark.parametrize(
+    ("is_moe", "lora_backend", "expects_lora"),
+    [
+        (True, "peft", True),
+        (True, "distill", False),
+        (False, "peft", False),
+    ],
+)
+def test_diffusion_config_enables_moe_backend_lora_selection_before_model_load(
+    is_moe,
+    lora_backend,
+    expects_lora,
+) -> None:
+    config = diffusion_vllm_config.create_diffusion_vllm_config(
+        torch.device("cpu"),
+        _od_config(
+            is_moe=is_moe,
+            lora_backend=lora_backend,
+            max_cpu_loras=3,
+        ),
+    )
+
+    assert (config.lora_config is not None) is expects_lora
+    if expects_lora:
+        assert config.lora_config.max_lora_rank == 512
+        assert config.lora_config.max_loras == 1
+        assert config.lora_config.max_cpu_loras == 3
+
+
 def test_paged_config_forwards_gpu_memory_utilization_to_native_cache_config() -> None:
     vllm_config = diffusion_vllm_config.create_diffusion_vllm_config(
         torch.device("cpu"),

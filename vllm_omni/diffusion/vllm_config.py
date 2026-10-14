@@ -10,6 +10,7 @@ from typing import Any, cast
 
 import torch
 from vllm.config import CompilationConfig, DeviceConfig, KVTransferConfig, VllmConfig
+from vllm.config.lora import LoRAConfig
 from vllm.transformers_utils.config import get_hf_text_config
 
 from vllm_omni.diffusion.data import OmniDiffusionConfig
@@ -218,6 +219,18 @@ def configure_diffusion_vllm_config(vllm_config: VllmConfig, od_config: OmniDiff
     vllm_config.parallel_config.enable_expert_parallel = parallel_config.enable_expert_parallel
 
     vllm_config.model_config = _make_diffusion_vllm_model_config(od_config)  # type: ignore[assignment]
+    lora_backend = getattr(od_config, "lora_backend", "peft")
+    lora_backend = getattr(lora_backend, "value", lora_backend)
+    if od_config.is_moe and lora_backend == "peft":
+        vllm_config.lora_config = LoRAConfig(
+            max_lora_rank=512,
+            max_loras=1,
+            max_cpu_loras=getattr(od_config, "max_cpu_loras", 1) or 1,
+            lora_dtype=od_config.dtype,
+            fully_sharded_loras=False,
+        )
+    else:
+        vllm_config.lora_config = None
     vllm_config.quant_config = od_config.quantization_config
     vllm_config.profiler_config = od_config.profiler_config
     if (

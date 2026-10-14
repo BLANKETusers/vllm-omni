@@ -203,6 +203,91 @@ def test_lora_manager_keeps_dlo_lora_buffers_on_compute_device(monkeypatch):
     assert pipeline.transformer.foo.lora_buffer_device == torch.device("cpu")
 
 
+@pytest.mark.parametrize(
+    "target_modules",
+    [
+        ["experts.0.gate_proj"],
+        r".*\.experts\.\d+\.gate_proj$",
+    ],
+)
+def test_lora_manager_matches_scoped_moe_targets(monkeypatch, target_modules):
+    import vllm.model_executor.layers.fused_moe as upstream_moe
+
+    import vllm_omni.diffusion.lora.manager as manager_mod
+
+    class _TargetMoERunner(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.moe_config = SimpleNamespace(
+                is_act_and_mul=True,
+                num_experts=2,
+            )
+            self.global_num_experts = 2
+
+    monkeypatch.setattr(upstream_moe, "MoERunner", _TargetMoERunner)
+    monkeypatch.setattr(manager_mod, "BaseLayerWithLoRA", _DummyBaseLayerWithLoRA)
+    monkeypatch.setattr(
+        manager_mod,
+        "from_layer_diffusion",
+        lambda *, layer, **_kwargs: _DummyBaseLayerWithLoRA(layer),
+    )
+    monkeypatch.setattr(
+        manager_mod,
+        "replace_submodule",
+        lambda root, name, sub: fake_replace_submodule(root, name, sub),
+    )
+
+    pipeline = torch.nn.Module()
+    pipeline.transformer = torch.nn.Module()
+    pipeline.transformer.experts = _TargetMoERunner()
+    manager = DiffusionLoRAManager(
+        pipeline=pipeline,
+        device=torch.device("cpu"),
+        dtype=torch.bfloat16,
+    )
+
+    peft_helper = type(
+        "_PH",
+        (),
+        {"r": 1, "target_modules": target_modules},
+    )()
+    manager._replace_layers_with_lora(peft_helper)
+
+    assert "transformer.experts" in manager._lora_modules
+    assert isinstance(pipeline.transformer.experts, _DummyBaseLayerWithLoRA)
+
+
+def test_moe_punica_initializes_public_mapping_metadata(monkeypatch):
+    import vllm.lora.punica_wrapper as punica_module
+
+    class _FakePunica:
+        def __init__(self):
+            self.update_calls = []
+
+        def update_metadata(self, mapping, lora_index_to_id, max_loras, vocab_size):
+            self.update_calls.append((mapping, lora_index_to_id, max_loras, vocab_size))
+
+    punica = _FakePunica()
+    monkeypatch.setattr(punica_module, "get_punica_wrapper", lambda *args, **kwargs: punica)
+
+    manager = object.__new__(DiffusionLoRAManager)
+    manager._moe_punica_wrapper = None
+    manager._max_lora_rank = 8
+    manager.max_cached_adapters = 1
+    manager.dtype = torch.bfloat16
+    manager.device = torch.device("cpu")
+    manager._MOE_PUNICA_MAX_TOKENS = 8
+
+    assert manager._get_moe_punica_wrapper() is punica
+    assert len(punica.update_calls) == 1
+    mapping, lora_index_to_id, max_loras, vocab_size = punica.update_calls[0]
+    assert mapping.index_mapping == (1,) * 8
+    assert mapping.prompt_mapping == (1,)
+    assert lora_index_to_id == [1]
+    assert max_loras == 1
+    assert vocab_size == 0
+
+
 def test_move_moe_lora_buffers_keeps_all_stacks_and_views_on_device():
     from vllm_omni.diffusion.lora.utils import _move_moe_lora_buffers
 
