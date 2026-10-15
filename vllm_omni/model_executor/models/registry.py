@@ -289,6 +289,12 @@ _OMNI_MODELS = {
         "hunyuan_image3",
         "HunyuanImage3ForConditionalGeneration",
     ),
+    ## fish_omni (Fish Audio Drama 3)
+    "FishOmniForConditionalGeneration": (
+        "fish_omni",
+        "fish_omni_model",
+        "FishOmniForConditionalGeneration",
+    ),
     ## fish_speech (Fish Speech S2 Pro)
     "FishSpeechSlowARForConditionalGeneration": (
         "fish_speech",
@@ -482,6 +488,12 @@ _OMNI_MODELS = {
         "minimax_music3",
         "acoustic",
         "MiniMaxMusic3AcousticForConditionalGeneration",
+    ),
+    ## YuE2-3B (text-to-music; single-stage native-AR with terminal NAR/VAE)
+    "Yue2ForCausalLM": (
+        "yue2",
+        "yue2",
+        "Yue2ForCausalLM",
     ),
 }
 

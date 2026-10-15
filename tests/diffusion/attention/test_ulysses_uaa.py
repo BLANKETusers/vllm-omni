@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 import tempfile
 from contextlib import AbstractContextManager
 from types import SimpleNamespace
@@ -11,9 +13,9 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import torch
+from vllm.utils.network_utils import get_file_store_init_method
 
 from tests.helpers.mark import hardware_test
-from tests.helpers.runtime import get_distributed_init_method
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
 from vllm_omni.diffusion.attention.layer import Attention
 from vllm_omni.diffusion.attention.parallel.ulysses import UlyssesParallelAttention
@@ -783,8 +785,8 @@ def test_ulysses_uaa_matches_baseline(
     kv_heads = num_kv_heads if num_kv_heads is not None else num_heads
     has_joint = joint_len is not None
 
-    base_init_method = get_distributed_init_method()
-    sp_init_method = get_distributed_init_method()
+    base_init_method = get_file_store_init_method()
+    sp_init_method = get_file_store_init_method()
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".npz") as f_in:
         input_file = f_in.name
@@ -989,7 +991,7 @@ def test_ulysses_uaa_contract_skips_length_gather_matches_slow_path(num_heads: i
     head_size = 8
     seq_len = 6  # divisible by 2 so both ranks hold equal-length shards
 
-    init_method = get_distributed_init_method()
+    init_method = get_file_store_init_method()
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".npz") as f_in:
         input_file = f_in.name
@@ -1036,8 +1038,8 @@ def test_ulysses_uaa_2d_mask_layout_matches_baseline(
     num_heads = 3
     head_size = 8
 
-    base_init_method = get_distributed_init_method()
-    sp_init_method = get_distributed_init_method()
+    base_init_method = get_file_store_init_method()
+    sp_init_method = get_file_store_init_method()
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".npz") as f_in:
         input_file = f_in.name
@@ -1150,8 +1152,8 @@ def test_ulysses_uaa_hybrid_ring_matches_baseline(
     # rank0/1 -> 3+2=5, rank2/3 -> 3+2=5
     split_sizes = [3, 2, 3, 2]
 
-    base_init_method = get_distributed_init_method()
-    sp_init_method = get_distributed_init_method()
+    base_init_method = get_file_store_init_method()
+    sp_init_method = get_file_store_init_method()
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".npz") as f_in:
         input_file = f_in.name
@@ -1231,3 +1233,28 @@ def test_ulysses_uaa_hybrid_ring_matches_baseline(
                 os.remove(path)
             except OSError:
                 pass
+
+
+def test_default_ulysses_import_does_not_require_optional_symmem_backend():
+    # Use a fresh interpreter: successful CUDA E2E cannot cover missing optional
+    # dependencies, and this test module already imported Ulysses above.
+    code = """
+import importlib.abc
+import sys
+
+blocked = {
+    "vllm_omni.diffusion.distributed.a2a_permute",
+    "vllm_omni.diffusion.distributed.qkv_a2a",
+}
+
+class WithoutOptionalBackend(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname in blocked:
+            raise ImportError("optional symmetric-memory backend unavailable")
+
+sys.meta_path.insert(0, WithoutOptionalBackend())
+from vllm_omni.diffusion.attention.parallel.ulysses import UlyssesParallelAttention
+assert blocked.isdisjoint(sys.modules)
+"""
+    result = subprocess.run([sys.executable, "-c", code], text=True, capture_output=True, timeout=60)
+    assert result.returncode == 0, result.stderr
