@@ -70,6 +70,15 @@ def _move_moe_lora_buffers(instance: FusedMoEWithLoRA, device: torch.device) -> 
     instance.lora_b_stacked = lora_b_stacked
 
 
+def _validate_moe_lora_token_capacity(hidden_states: torch.Tensor, max_tokens: int) -> None:
+    num_tokens = hidden_states.shape[0]
+    if num_tokens > max_tokens:
+        raise ValueError(
+            f"MoE LoRA token count {num_tokens} exceeds the configured capacity {max_tokens}. "
+            "Increase max_num_batched_tokens before model initialization."
+        )
+
+
 def _match_target_modules(module_name: str, target_modules: list[str]) -> bool:
     """from vllm/lora/model_manager.py _match_target_modules, helper function"""
     import regex as re
@@ -114,12 +123,15 @@ def from_layer_diffusion(
     lora_config: LoRAConfig,
     packed_modules_list: list[str],
     model_config: PretrainedConfig | None = None,
+    max_num_batched_tokens: int | None = None,
 ) -> nn.Module:
     """
     Diffusion-specific layer replacement. similar to vLLM's `from_layer`
     """
     # MoE wrappers own the whole runner and do not use dense packed-layer mapping.
     if isinstance(layer, MoERunner):
+        if max_num_batched_tokens is None:
+            raise RuntimeError("MoE LoRA token capacity was not configured")
         wrapper_cls = _select_moe_lora_wrapper_cls()
         instance = wrapper_cls(layer)
         buffer_device: list[torch.device | None] = [None]
@@ -164,6 +176,11 @@ def from_layer_diffusion(
         # Call through nn.Module.__call__ to preserve those hooks.
         # Instance-assigned functions capture the wrapper instead of taking self.
         def _forward_via_base_call(*args, **kwargs):
+            hidden_states = kwargs.get("hidden_states")
+            if hidden_states is None and args:
+                hidden_states = args[0]
+            if hidden_states is not None:
+                _validate_moe_lora_token_capacity(hidden_states, max_num_batched_tokens)
             return instance.base_layer(*args, **kwargs)
 
         instance.forward = _forward_via_base_call  # type: ignore[method-assign]

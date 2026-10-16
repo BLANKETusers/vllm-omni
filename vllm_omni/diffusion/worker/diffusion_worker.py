@@ -587,6 +587,12 @@ class DiffusionWorker:
 
         lora_backend = self.od_config.lora_backend
         if lora_backend == LoRABackend.PEFT:
+            max_num_batched_tokens = None
+            if self.od_config.is_moe:
+                assert self.vllm_config is not None
+                max_num_batched_tokens = self.vllm_config.scheduler_config.max_num_batched_tokens
+                if type(max_num_batched_tokens) is not int or max_num_batched_tokens <= 0:
+                    raise ValueError("MoE LoRA requires a positive scheduler max_num_batched_tokens")
             self.lora_manager = DiffusionLoRAManager(
                 pipeline=self.model_runner.pipeline,
                 device=self.device,
@@ -594,6 +600,7 @@ class DiffusionWorker:
                 max_cached_adapters=self.od_config.max_cpu_loras,
                 lora_path=lora_path,
                 lora_scale=self.od_config.lora_scale,
+                max_num_batched_tokens=max_num_batched_tokens,
             )
         elif lora_backend == LoRABackend.DISTILL:
             pipeline = self.model_runner.pipeline

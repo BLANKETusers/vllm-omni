@@ -276,7 +276,7 @@ def test_moe_punica_initializes_public_mapping_metadata(monkeypatch):
     manager.max_cached_adapters = 1
     manager.dtype = torch.bfloat16
     manager.device = torch.device("cpu")
-    manager._MOE_PUNICA_MAX_TOKENS = 8
+    manager._max_num_batched_tokens = 8
 
     assert manager._get_moe_punica_wrapper() is punica
     assert len(punica.update_calls) == 1
@@ -286,6 +286,48 @@ def test_moe_punica_initializes_public_mapping_metadata(monkeypatch):
     assert lora_index_to_id == [1]
     assert max_loras == 1
     assert vocab_size == 0
+
+
+def test_moe_lora_token_capacity_is_validated_before_forward(monkeypatch):
+    import vllm_omni.diffusion.lora.utils as utils_mod
+
+    class _Runner(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.register_forward_pre_hook(lambda *_args: None)
+
+        def forward(self, hidden_states):
+            return hidden_states
+
+    class _Wrapper(torch.nn.Module):
+        def __init__(self, base_layer):
+            super().__init__()
+            self.base_layer = base_layer
+            self.adapter_enabled = torch.ones(1, dtype=torch.int)
+
+        def create_lora_weights(self, *_args, **_kwargs):
+            pass
+
+        def set_lora(self, *_args, **_kwargs):
+            pass
+
+        def reset_lora(self, *_args, **_kwargs):
+            pass
+
+    monkeypatch.setattr(utils_mod, "MoERunner", _Runner)
+    monkeypatch.setattr(utils_mod, "_select_moe_lora_wrapper_cls", lambda: _Wrapper)
+
+    wrapper = utils_mod.from_layer_diffusion(
+        _Runner(),
+        max_loras=1,
+        lora_config=SimpleNamespace(),  # type: ignore[arg-type]
+        packed_modules_list=[],
+        max_num_batched_tokens=8,
+    )
+
+    assert wrapper(torch.zeros((8, 4))).shape == (8, 4)
+    with pytest.raises(ValueError, match="token count 9 exceeds the configured capacity 8"):
+        wrapper(torch.zeros((9, 4)))
 
 
 def test_move_moe_lora_buffers_keeps_all_stacks_and_views_on_device():
@@ -1003,16 +1045,46 @@ def test_lora_manager_scales_correctly_with_rank_changes(monkeypatch):
     assert torch.all(lora_a == 1)
     assert torch.all(lora_b == initial_scale)
 
-    # Increase the rank; this resets the buffers, so the adapter is activated again
+    # Increase the rank; this resets the buffers, so the adapter is activated again.
     manager._ensure_max_lora_rank(8)
 
     # Ensure we actually took the rank expansion path, which recreates
-    # and sets the weight buffets, but that the scale didn't change
+    # and sets the weight buffers, but that the scale didn't change.
     assert lora_model.transformer.foo.create_calls == 1
     assert len(lora_model.transformer.foo.set_calls) == 2
     lora_a, lora_b = lora_model.transformer.foo.set_calls[1]
     assert torch.all(lora_a == 1)
     assert torch.all(lora_b == initial_scale)
+
+
+def test_rank_growth_invalidates_moe_punica_before_republish(monkeypatch):
+    adapter_id = 7
+    lora_model = _DummyLM(rank=8)
+    manager = DiffusionLoRAManager(
+        pipeline=_DummyPipeline(),
+        device=torch.device("cpu"),
+        dtype=torch.bfloat16,
+    )
+    manager._max_lora_rank = 8
+    manager._lora_modules = {"transformer.foo": lora_model.transformer.foo}
+    manager._registered_adapters = {adapter_id: lora_model}
+    manager._active_adapter_id = adapter_id
+    manager._adapter_scales = {adapter_id: 0.5}
+    manager._moe_punica_wrapper = object()
+
+    published_cache_values = []
+
+    def _publish_with_current_rank():
+        published_cache_values.append(manager._moe_punica_wrapper)
+        manager._moe_punica_wrapper = SimpleNamespace(max_lora_rank=manager._max_lora_rank)
+
+    monkeypatch.setattr(manager, "_bind_adapter_weights", lambda *_args: None)
+    monkeypatch.setattr(manager, "_publish_moe_lora_context", _publish_with_current_rank)
+
+    manager._ensure_max_lora_rank(128)
+
+    assert published_cache_values == [None]
+    assert manager._moe_punica_wrapper.max_lora_rank == 128
 
 
 def test_scale_keys_are_rounded():

@@ -87,6 +87,7 @@ class DiffusionLoRAManager:
         max_cached_adapters: int = 1,
         lora_path: str | None = None,
         lora_scale: float = 1.0,
+        max_num_batched_tokens: int | None = None,
     ):
         """
         Initialize the DiffusionLoRAManager.
@@ -95,10 +96,17 @@ class DiffusionLoRAManager:
             max_cached_adapters: Maximum number of LoRA adapters to keep in the
                 CPU-side cache (LRU). This mirrors vLLM's `max_cpu_loras` and is
                 exposed to users via `OmniDiffusionConfig.max_cpu_loras`.
+            max_num_batched_tokens: Preallocated token-mapping capacity for MoE
+                LoRA forwards.
         """
         self.pipeline = pipeline
         self.device = device
         self.dtype = dtype
+        if max_num_batched_tokens is not None and (
+            type(max_num_batched_tokens) is not int or max_num_batched_tokens <= 0
+        ):
+            raise ValueError("max_num_batched_tokens must be a positive integer")
+        self._max_num_batched_tokens = max_num_batched_tokens
         # Imported here: vllm_omni.diffusion.data imports this package while it
         # is still initializing, and the offloader package imports that module.
         from vllm_omni.diffusion.offloader.config import OffloadStrategy, resolve_offload_strategy
@@ -540,6 +548,7 @@ class DiffusionLoRAManager:
                     lora_config=lora_config,
                     packed_modules_list=packed_modules_list,
                     model_config=None,
+                    max_num_batched_tokens=self._max_num_batched_tokens,
                 )
 
                 if lora_layer is not module and isinstance(lora_layer, BaseLayerWithLoRA):
@@ -568,6 +577,7 @@ class DiffusionLoRAManager:
 
         logger.info("Increasing max LoRA rank: %d -> %d", self._max_lora_rank, valid_max_rank)
         self._max_lora_rank = valid_max_rank
+        self._moe_punica_wrapper = None
 
         if not self._lora_modules:
             return
@@ -592,6 +602,8 @@ class DiffusionLoRAManager:
             active_scale = self._adapter_scales[active_id]
             self._active_adapter_id = None
             self._activate_adapter(active_id, active_scale)
+        else:
+            self._publish_moe_lora_context()
 
     @classmethod
     def _get_smallest_valid_max_rank(cls, min_rank: int) -> int:
@@ -955,15 +967,15 @@ class DiffusionLoRAManager:
             lora_layer.reset_lora(0)
         self._suspended_adapter_id = None
 
-    # Capacity for token-to-slot indices, narrowed to the current forward's token count.
-    _MOE_PUNICA_MAX_TOKENS = 65536
-
     def _get_moe_punica_wrapper(self):
         """Lazily create the shared MoE token-to-slot mapping."""
         if self._moe_punica_wrapper is not None:
             return self._moe_punica_wrapper
         from vllm.lora.punica_wrapper import get_punica_wrapper
 
+        max_tokens = self._max_num_batched_tokens
+        if max_tokens is None:
+            raise RuntimeError("MoE LoRA token capacity was not configured")
         # GPU Punica requires LoRAConfig; also pass it to NPU.
         lora_config = LoRAConfig(
             max_lora_rank=self._max_lora_rank,
@@ -972,7 +984,6 @@ class DiffusionLoRAManager:
             lora_dtype=self.dtype,
             fully_sharded_loras=False,
         )
-        max_tokens = self._MOE_PUNICA_MAX_TOKENS
         punica = get_punica_wrapper(max_tokens, max_batches=1, device=self.device, lora_config=lora_config)
         mapping = LoRAMapping(
             index_mapping=(1,) * max_tokens,
