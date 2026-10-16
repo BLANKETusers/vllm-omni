@@ -17,6 +17,9 @@ from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
 from vllm_omni.platforms import current_omni_platform
 
+# Dense diffusion has no native scheduler token budget to inherit.
+DEFAULT_DIFFUSION_MOE_LORA_MAX_TOKENS = 65536
+
 
 def resolve_diffusion_max_model_len(od_config: OmniDiffusionConfig) -> int:
     """Resolve the native KV admission bound for a diffusion stage."""
@@ -189,6 +192,24 @@ def _make_diffusion_vllm_model_config(od_config: OmniDiffusionConfig) -> _Diffus
         enforce_eager=getattr(od_config, "enforce_eager", False),
         is_moe=bool(getattr(od_config, "is_moe", False)),
     )
+
+
+def resolve_diffusion_moe_lora_token_capacity(
+    od_config: OmniDiffusionConfig,
+    vllm_config: VllmConfig,
+) -> int | None:
+    """Resolve the preallocated token-mapping capacity for dynamic MoE LoRA."""
+    if not od_config.is_moe:
+        return None
+    if od_config.diffusion_kv_mode is DiffusionKVCacheMode.PAGED_SCHEDULER:
+        capacity = vllm_config.scheduler_config.max_num_batched_tokens
+    else:
+        capacity = od_config.max_num_batched_tokens
+        if capacity is None:
+            capacity = DEFAULT_DIFFUSION_MOE_LORA_MAX_TOKENS
+    if type(capacity) is not int or capacity <= 0:
+        raise ValueError("MoE LoRA requires a positive token capacity")
+    return capacity
 
 
 def create_base_diffusion_vllm_config(

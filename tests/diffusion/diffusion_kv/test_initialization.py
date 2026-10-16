@@ -247,6 +247,50 @@ def test_diffusion_config_enables_moe_backend_lora_selection_before_model_load(
         assert config.lora_config.max_cpu_loras == 3
 
 
+@pytest.mark.parametrize(
+    ("mode", "configured_capacity", "expected_capacity"),
+    [
+        (DiffusionKVCacheMode.DENSE_LEGACY, 32768, 32768),
+        (
+            DiffusionKVCacheMode.DENSE_LEGACY,
+            None,
+            diffusion_vllm_config.DEFAULT_DIFFUSION_MOE_LORA_MAX_TOKENS,
+        ),
+        (DiffusionKVCacheMode.PAGED_SCHEDULER, 32768, 32768),
+    ],
+)
+def test_moe_lora_token_capacity_uses_effective_diffusion_config(
+    mode,
+    configured_capacity,
+    expected_capacity,
+    monkeypatch,
+) -> None:
+    import vllm_omni.diffusion.worker.diffusion_worker as worker_module
+
+    od_config = _od_config(
+        diffusion_kv_mode=mode,
+        is_moe=True,
+        lora_backend=worker_module.LoRABackend.PEFT,
+        lora_path=None,
+        lora_scale=1.0,
+        max_cpu_loras=1,
+        max_num_batched_tokens=configured_capacity,
+    )
+    vllm_config = diffusion_vllm_config.create_diffusion_vllm_config(torch.device("cpu"), od_config)
+    manager_cls = Mock()
+    monkeypatch.setattr(worker_module, "DiffusionLoRAManager", manager_cls)
+    worker = object.__new__(worker_module.DiffusionWorker)
+    worker.od_config = od_config
+    worker.vllm_config = vllm_config
+    worker.model_runner = Mock()
+    worker.model_runner.pipeline.lora_is_fused = False
+    worker.device = torch.device("cpu")
+
+    worker.init_lora_manager()
+
+    assert manager_cls.call_args.kwargs["max_num_batched_tokens"] == expected_capacity
+
+
 def test_paged_config_forwards_gpu_memory_utilization_to_native_cache_config() -> None:
     vllm_config = diffusion_vllm_config.create_diffusion_vllm_config(
         torch.device("cpu"),

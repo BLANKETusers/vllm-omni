@@ -319,24 +319,6 @@ class TestDiffusionWorkerWakeUp:
 class TestDiffusionWorkerInitLoraManager:
     """Test DiffusionWorker.init_lora_manager method."""
 
-    def test_peft_moe_uses_scheduler_token_capacity(self, mocker: MockerFixture, mock_gpu_worker):
-        from vllm_omni.diffusion.lora.manager import LoRABackend
-
-        mock_gpu_worker.od_config.lora_backend = LoRABackend.PEFT
-        mock_gpu_worker.od_config.lora_path = None
-        mock_gpu_worker.od_config.lora_scale = 1.0
-        mock_gpu_worker.od_config.max_cpu_loras = 1
-        mock_gpu_worker.od_config.dtype = torch.bfloat16
-        mock_gpu_worker.od_config.is_moe = True
-        mock_gpu_worker.model_runner.pipeline.lora_is_fused = False
-        mock_gpu_worker.vllm_config = mocker.Mock()
-        mock_gpu_worker.vllm_config.scheduler_config.max_num_batched_tokens = 8192
-        manager_cls = mocker.patch("vllm_omni.diffusion.worker.diffusion_worker.DiffusionLoRAManager")
-
-        mock_gpu_worker.init_lora_manager()
-
-        assert manager_cls.call_args.kwargs["max_num_batched_tokens"] == 8192
-
     def test_skips_when_lora_already_fused(self, mocker: MockerFixture, mock_gpu_worker):
         """When pipeline.lora_is_fused is True, init_lora_manager returns immediately."""
         from vllm_omni.diffusion.lora.manager import LoRABackend
