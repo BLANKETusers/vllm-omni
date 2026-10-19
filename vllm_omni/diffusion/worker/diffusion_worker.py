@@ -645,11 +645,13 @@ class DiffusionWorker:
                 raise ValueError("Dynamic PEFT LoRA requires a single adapter path and scale")
             max_cpu_loras = self.od_config.max_cpu_loras
             assert max_cpu_loras is not None, "max_cpu_loras must be resolved before worker initialization"
-            assert self.vllm_config is not None
-            max_num_batched_tokens = resolve_diffusion_moe_lora_token_capacity(
-                self.od_config,
-                self.vllm_config,
-            )
+            max_num_batched_tokens = None
+            if getattr(self.od_config, "is_moe", False) is True:
+                assert self.vllm_config is not None
+                max_num_batched_tokens = resolve_diffusion_moe_lora_token_capacity(
+                    self.od_config,
+                    self.vllm_config,
+                )
             self.lora_manager = DiffusionLoRAManager(
                 pipeline=pipeline,
                 device=self.device,
