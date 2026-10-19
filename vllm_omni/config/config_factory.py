@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import functools
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any
@@ -94,6 +94,17 @@ def _name_match_candidate(model: str) -> str:
     not resolve to the ``qwen3_tts`` pipeline.
     """
     return model.rstrip("/").rsplit("/", 1)[-1]
+
+
+def _match_pipeline_key(model: str, keys: Iterable[str]) -> str | None:
+    model_lower = _name_match_candidate(model).lower().replace("-", "").replace("_", "")
+    best: str | None = None
+    best_len = 0
+    for key in keys:
+        candidate = key.lower().replace("-", "").replace("_", "")
+        if candidate and candidate in model_lower and len(candidate) > best_len:
+            best, best_len = key, len(candidate)
+    return best
 
 
 def with_trust_remote_code_override(
@@ -244,6 +255,7 @@ class StageConfigFactory:
             model_index = get_hf_file_to_dict("model_index.json", config_source, revision=None)
             if model_index and "_class_name" in model_index:
                 class_name = model_index["_class_name"]
+                matches: list[PipelineConfig] = []
                 for obj in OMNI_PIPELINES.values():
                     # If we have a resolver, call it with the optional hf_config
                     # to get the default pipeline config for this key
@@ -252,12 +264,17 @@ class StageConfigFactory:
                         pipeline_cfg.diffusers_class_name,
                         *pipeline_cfg.diffusers_class_aliases,
                     ):
-                        logger.info(
-                            "Detected pipeline %r from model_index.json (_class_name=%r)",
-                            pipeline_cfg.model_type,
-                            class_name,
-                        )
-                        return pipeline_cfg.model_type
+                        matches.append(pipeline_cfg)
+                if matches:
+                    # Disambiguate a shared Diffusers class by basename; keep the default for ordinary Wan.
+                    matched_key = _match_pipeline_key(model, (cfg.model_type for cfg in matches))
+                    pipeline_cfg = next((cfg for cfg in matches if cfg.model_type == matched_key), matches[0])
+                    logger.info(
+                        "Detected pipeline %r from model_index.json (_class_name=%r)",
+                        pipeline_cfg.model_type,
+                        class_name,
+                    )
+                    return pipeline_cfg.model_type
         except Exception as e:
             logger.debug(f"Failed to detect model type for diffusers-style models: {e}")
 
@@ -267,18 +284,7 @@ class StageConfigFactory:
         # so "cosyvoice3" (length 10) beats "cosyvoice" (length 9). Only
         # the basename is scanned so URI segments such as the bucket name
         # cannot select an unrelated pipeline.
-        model_lower = _name_match_candidate(model).lower().replace("-", "").replace("_", "")
-        best: str | None = None
-        best_len = 0
-        for registered_key in OMNI_PIPELINES.keys():
-            candidate = registered_key.lower().replace("-", "").replace("_", "")
-            if candidate and candidate in model_lower and len(candidate) > best_len:
-                best = registered_key
-                best_len = len(candidate)
-        if best is not None:
-            return best
-
-        return None
+        return _match_pipeline_key(model, OMNI_PIPELINES.keys())
 
     @classmethod
     def get_pipeline_config(
@@ -648,13 +654,6 @@ class StageConfigFactory:
         kwargs: dict[str, Any],
     ) -> tuple[dict[str, Any], DiffusionParallelConfig, dict[str, Any], str]:
         """Normalize inputs shared by typed and compatibility diffusion builders."""
-        # Preserve the default builder's explicit top-level override of model
-        # extras before the strict same-source alias validator runs.
-        if kwargs.get("auxiliary_text_encoder") is not None:
-            kwargs = dict(kwargs)
-            extras = dict(kwargs.get("extras") or {})
-            extras.pop("auxiliary_text_encoder", None)
-            kwargs["extras"] = extras
         kwargs = normalize_and_validate_diffusion_engine_ingress_kwargs(kwargs, stage_id=0)
         raw_sampling_params = kwargs.get("default_sampling_params")
         if isinstance(raw_sampling_params, str):
@@ -679,18 +678,6 @@ class StageConfigFactory:
         engine_args = OmniDiffusionConfig.normalize_init_kwargs(
             {name: value for name, value in kwargs.items() if name in diffusion_config_fields}
         )
-
-        extras = dict(engine_args.get("extras") or {})
-        for key, default in (
-            ("auxiliary_text_encoder", None),
-            ("default_llama_model_id", "meta-llama/Meta-Llama-3.1-8B-Instruct"),
-        ):
-            value = kwargs.get(key)
-            if value is not None:
-                extras[key] = value
-            else:
-                extras.setdefault(key, default)
-        engine_args["extras"] = extras
 
         model_class_name = engine_args.get("model_class_name")
         final_output_type = get_diffusion_output_type(model_class_name)
