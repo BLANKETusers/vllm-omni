@@ -78,6 +78,7 @@ class DiffusionLoRAManager:
     # a manager built without __init__ (some tests use object.__new__) reads as
     # "nothing suspended" instead of raising.
     _suspended_adapter_id: int | None = None
+    _max_num_batched_tokens: int | None = None
 
     def __init__(
         self,
