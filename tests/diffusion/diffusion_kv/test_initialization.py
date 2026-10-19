@@ -284,6 +284,7 @@ def test_moe_lora_token_capacity_uses_effective_diffusion_config(
     worker.vllm_config = vllm_config
     worker.model_runner = Mock()
     worker.model_runner.pipeline.lora_is_fused = False
+    worker.lora_manager = None
     worker.device = torch.device("cpu")
 
     worker.init_lora_manager()
