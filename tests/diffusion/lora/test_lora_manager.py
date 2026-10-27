@@ -281,11 +281,127 @@ def test_moe_punica_initializes_public_mapping_metadata(monkeypatch):
     assert manager._get_moe_punica_wrapper() is punica
     assert len(punica.update_calls) == 1
     mapping, lora_index_to_id, max_loras, vocab_size = punica.update_calls[0]
-    assert mapping.index_mapping == (1,) * 8
-    assert mapping.prompt_mapping == (1,)
-    assert lora_index_to_id == [1]
+    assert mapping.index_mapping == (0,) * 8
+    assert mapping.prompt_mapping == (0,)
+    assert lora_index_to_id == [None]
     assert max_loras == 1
     assert vocab_size == 0
+
+
+def test_moe_lora_context_is_prepared_at_init_when_capacity_is_set(monkeypatch):
+    calls: list[str] = []
+
+    def _ensure(self):
+        calls.append("ensure")
+
+    monkeypatch.setattr(DiffusionLoRAManager, "_ensure_moe_lora_context", _ensure)
+    DiffusionLoRAManager(
+        pipeline=_DummyPipeline(),
+        device=torch.device("cpu"),
+        dtype=torch.bfloat16,
+        max_num_batched_tokens=8,
+    )
+    assert calls == ["ensure"]
+
+
+def test_moe_lora_context_is_skipped_without_token_capacity(monkeypatch):
+    calls: list[str] = []
+
+    def _replace(self):
+        calls.append("replace")
+
+    monkeypatch.setattr(DiffusionLoRAManager, "_replace_moe_runners_with_lora", _replace)
+    DiffusionLoRAManager(
+        pipeline=_DummyPipeline(),
+        device=torch.device("cpu"),
+        dtype=torch.bfloat16,
+    )
+    assert calls == []
+
+
+def test_moe_runners_are_wrapped_at_init_when_capacity_is_set(monkeypatch):
+    import vllm.model_executor.layers.fused_moe as upstream_moe
+
+    import vllm_omni.diffusion.lora.manager as manager_mod
+
+    class _TargetMoERunner(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.moe_config = SimpleNamespace(is_act_and_mul=True, num_experts=2)
+            self.global_num_experts = 2
+
+    monkeypatch.setattr(upstream_moe, "MoERunner", _TargetMoERunner)
+    monkeypatch.setattr(manager_mod, "BaseLayerWithLoRA", _DummyBaseLayerWithLoRA)
+    monkeypatch.setattr(
+        manager_mod,
+        "from_layer_diffusion",
+        lambda *, layer, **_kwargs: _DummyBaseLayerWithLoRA(layer),
+    )
+    monkeypatch.setattr(
+        manager_mod,
+        "replace_submodule",
+        lambda root, name, sub: fake_replace_submodule(root, name, sub),
+    )
+    monkeypatch.setattr(manager_mod.DiffusionLoRAManager, "_publish_moe_lora_context", lambda self: None)
+
+    pipeline = torch.nn.Module()
+    pipeline.transformer = torch.nn.Module()
+    pipeline.transformer.experts = _TargetMoERunner()
+    manager = DiffusionLoRAManager(
+        pipeline=pipeline,
+        device=torch.device("cpu"),
+        dtype=torch.bfloat16,
+        max_num_batched_tokens=8,
+    )
+
+    assert "transformer.experts" in manager._lora_modules
+    assert isinstance(pipeline.transformer.experts, _DummyBaseLayerWithLoRA)
+
+
+def test_publish_moe_lora_context_uses_no_lora_mapping_until_adapter_is_active(monkeypatch):
+    import vllm.lora.layers.fused_moe as fused_moe
+    import vllm.lora.punica_wrapper as punica_module
+
+    class _FakePunica:
+        def __init__(self):
+            self.update_calls = []
+
+        def update_metadata(self, mapping, lora_index_to_id, max_loras, vocab_size):
+            self.update_calls.append((mapping, lora_index_to_id, max_loras, vocab_size))
+
+    class _FakeMoELoRA(fused_moe.FusedMoEWithLoRA):
+        def __init__(self):
+            torch.nn.Module.__init__(self)
+            self.mappings = []
+
+        def set_mapping(self, punica_wrapper):
+            self.mappings.append(punica_wrapper)
+
+    punica = _FakePunica()
+    monkeypatch.setattr(punica_module, "get_punica_wrapper", lambda *args, **kwargs: punica)
+
+    manager = object.__new__(DiffusionLoRAManager)
+    manager._moe_punica_wrapper = None
+    manager._max_lora_rank = 8
+    manager.max_cached_adapters = 1
+    manager.dtype = torch.bfloat16
+    manager.device = torch.device("cpu")
+    manager._max_num_batched_tokens = 4
+    manager._active_adapter_id = None
+    wrapper = _FakeMoELoRA()
+    manager._lora_modules = {"transformer.experts": wrapper}
+
+    manager._publish_moe_lora_context()
+    mapping, lora_index_to_id, _, _ = punica.update_calls[-1]
+    assert mapping.index_mapping == (0,) * 4
+    assert lora_index_to_id == [None]
+    assert wrapper.mappings == [punica]
+
+    manager._active_adapter_id = 7
+    manager._publish_moe_lora_context()
+    mapping, lora_index_to_id, _, _ = punica.update_calls[-1]
+    assert mapping.index_mapping == (1,) * 4
+    assert lora_index_to_id == [1]
 
 
 def test_moe_lora_token_capacity_is_validated_before_forward(monkeypatch):
