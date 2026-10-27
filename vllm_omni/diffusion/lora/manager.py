@@ -560,7 +560,6 @@ class DiffusionLoRAManager:
         )
 
         for component_name, component in self._iter_lora_components():
-
             # Collect replacements first to avoid mutating the module tree
             # while iterating over named_modules().
             pending_replacements: list[tuple[str, str, nn.Module, list[str]]] = []
