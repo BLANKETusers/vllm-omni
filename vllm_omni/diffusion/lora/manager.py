@@ -1219,11 +1219,19 @@ class DiffusionLoRAManager:
             if bank is not None:
                 bank.close()
             self._reset_lora_layers()
+            # Roll back to the no-adapter mapping: the token mapping is derived
+            # from ``_active_adapter_id``, which is still None here.
+            self._publish_moe_lora_context()
             raise
 
         self._active_adapter_id = adapter_id
         self._active_scale = scale
         self._update_adapter_scale(adapter_id, scale)
+        # Republish now that the adapter state is committed. The mapping is
+        # derived from ``_active_adapter_id``, so the publish inside ``try``
+        # still binds slot 0; without this the MoE kernels would keep taking
+        # the no-LoRA path and silently skip the expert contribution.
+        self._publish_moe_lora_context()
 
     def _deactivate_all_adapters(self) -> None:
         if self._active_adapter_id is None:
