@@ -67,6 +67,14 @@ def test_moe_forward_dispatch_to_blend_when_capturing(monkeypatch: pytest.Monkey
     torch.testing.assert_close(blended, reference)
 
 
+def test_moe_forward_capturing_none_mask_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Capture with mask=None must not fall through to und_expert (#7318)."""
+    hidden = torch.randn(2, 3, 4)
+    monkeypatch.setattr(m, "_is_graph_capturing", lambda device: True)
+    with pytest.raises(RuntimeError, match="requires gen_token_mask"):
+        m.moe_forward(hidden, _und, _gen, None)
+
+
 def test_moe_forward_capturing_all_false_mask_still_runs_both_experts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -159,6 +167,19 @@ def test_get_input_embeddings_graph_safe_blend(monkeypatch: pytest.MonkeyPatch) 
     # base positions -> 1.0, gen positions -> 2.0
     expected = torch.where((input_ids >= 8).unsqueeze(-1), torch.full((2, 3, 3), 2.0), torch.full((2, 3, 3), 1.0))
     torch.testing.assert_close(out, expected)
+
+
+def test_get_input_embeddings_graph_safe_clamps_oob_gen_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Out-of-range gen ids must not index past gen_embed_tokens during capture."""
+    lm = _make_lm()
+    monkeypatch.setattr(m, "_is_graph_capturing", lambda device: True)
+
+    # 99 is far past gen table size 4; clamp should keep the lookup in range.
+    input_ids = torch.tensor([[0, 99]])
+    out = lm.get_input_embeddings(input_ids)
+    assert out.shape == (1, 2, 3)
+    torch.testing.assert_close(out[0, 0], torch.full((3,), 1.0))
+    torch.testing.assert_close(out[0, 1], torch.full((3,), 2.0))
 
 
 def test_get_input_embeddings_eager_path_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:

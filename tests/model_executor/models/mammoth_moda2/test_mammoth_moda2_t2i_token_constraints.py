@@ -89,6 +89,15 @@ def test_compute_logits_kwargs_refresh_generated_len_across_steps() -> None:
     assert torch.isneginf(boundary[0, _VISUAL_START])
 
 
+def test_t2i_missing_generated_len_leaves_row_unconstrained() -> None:
+    host = _host()
+    info = _t2i_info(0)
+    del info["generated_len"]
+    host.update_decode_step_metadata(runtime_additional_information=[info])
+    logits = torch.arange(16, dtype=torch.float32).unsqueeze(0)
+    torch.testing.assert_close(host._apply_t2i_token_constraints(logits.clone()), logits)
+
+
 def test_missing_runtime_info_leaves_logits_unchanged() -> None:
     host = _host()
     logits = torch.arange(16, dtype=torch.float32).unsqueeze(0)

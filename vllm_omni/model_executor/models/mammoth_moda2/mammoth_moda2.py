@@ -195,7 +195,15 @@ def moe_forward(
     if gen_expert is None:
         return und_expert(hidden_states)
 
-    if gen_token_mask is not None and gen_token_mask.numel() > 0 and _is_graph_capturing(hidden_states.device):
+    # FULL capture must record both experts. If input_ids were dropped
+    # (gen_token_mask is None), falling through to und_expert would bake
+    # the understanding path into the graph (#7318). Fail closed instead.
+    if _is_graph_capturing(hidden_states.device):
+        if gen_token_mask is None or gen_token_mask.numel() == 0:
+            raise RuntimeError(
+                "MammothModa2 MoE CUDA-graph capture requires gen_token_mask; "
+                "keep input_ids on the mm graph path via requires_raw_input_tokens (#7318)."
+            )
         return _moe_blend(hidden_states, und_expert, gen_expert, gen_token_mask)
 
     if gen_token_mask is None or not gen_token_mask.any():
@@ -492,7 +500,9 @@ class MammothModa2Qwen2ForCausalLM(nn.Module, SupportsPP):
             # out-of-range index; those rows are discarded by where().
             base_ids = input_ids.clamp(max=self.base_vocab_size - 1)
             base_emb = self.embed_tokens(base_ids)
-            gen_ids = (input_ids - int(self.gen_vocab_start_index)).clamp(min=0)
+            gen_ids = (input_ids - int(self.gen_vocab_start_index)).clamp(
+                min=0, max=self.gen_embed_tokens.num_embeddings - 1
+            )
             gen_emb = self.gen_embed_tokens(gen_ids)
             return torch.where(gen_mask.unsqueeze(-1), gen_emb, base_emb)
         if not gen_mask.any():
@@ -748,6 +758,11 @@ class _MammothModa2T2ITokenConstraints:
     the current ``generated_len``. Without that refresh, column_id stays frozen
     (or the cache stays None after dummy capture) and greedy decode can emit
     EOS before the visual grid is complete (#7318).
+
+    Any model that stashes per-step metadata in Python ``forward`` and reads it
+    from ``compute_logits`` must set ``supports_omni_decode_step_metadata`` so
+    the runner refreshes that cache outside capture; otherwise FULL replay
+    reintroduces the same stale-cache bug.
     """
 
     supports_omni_decode_step_metadata = True
@@ -796,7 +811,11 @@ class _MammothModa2T2ITokenConstraints:
             eol_token_id = _first_int(meta["eol_token_id"])
             visual_start = _first_int(meta["visual_token_start_id"])
             visual_end = _first_int(meta["visual_token_end_id"])
-            generated_len = int(runtime_info.get("generated_len", 0))
+            if "generated_len" not in runtime_info:
+                # Missing length is not column 0. Leave this row unconstrained
+                # rather than applying the wrong visual/EOL mask.
+                continue
+            generated_len = int(runtime_info["generated_len"])
 
             row = logits[i]
             column_id = generated_len % (ar_width + 1)

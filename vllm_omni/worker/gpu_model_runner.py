@@ -2337,7 +2337,9 @@ class OmniGPUModelRunner(PrefixCacheRunnerMixin, GPUModelRunner):
             }
             # CUDA-graph FULL replay skips Python model.forward, so per-step
             # runtime payloads (e.g. MammothModa2 generated_len) must be
-            # refreshed here, outside capture.
+            # refreshed here, outside capture. Models that opt into
+            # supports_omni_decode_step_metadata must not rely on Python
+            # forward to cache values later read from compute_logits.
             runtime_infos = model_kwargs_extra.get("runtime_additional_information")
             if runtime_infos is not None:
                 decode_meta_kwargs["runtime_additional_information"] = runtime_infos
