@@ -67,6 +67,39 @@ def test_moe_forward_dispatch_to_blend_when_capturing(monkeypatch: pytest.Monkey
     torch.testing.assert_close(blended, reference)
 
 
+def test_moe_forward_capturing_all_false_mask_still_runs_both_experts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dummy capture uses all-zero input_ids, so the mask is all False.
+
+    The graph-safe path must still invoke both experts so replay can select gen.
+    """
+    hidden = torch.randn(2, 3, 4)
+    all_false = torch.zeros(2, 3, dtype=torch.bool)
+    calls = {"und": 0, "gen": 0}
+
+    def und(x: torch.Tensor) -> torch.Tensor:
+        calls["und"] += 1
+        return x * 2.0
+
+    def gen(x: torch.Tensor) -> torch.Tensor:
+        calls["gen"] += 1
+        return x * 3.0
+
+    monkeypatch.setattr(m, "_is_graph_capturing", lambda device: True)
+    out = m.moe_forward(hidden, und, gen, all_false)
+
+    assert calls == {"und": 1, "gen": 1}
+    torch.testing.assert_close(out, und(hidden))
+
+
+def test_ar_wrappers_keep_raw_input_tokens() -> None:
+    assert m.MammothModa2ARForConditionalGeneration.requires_raw_input_tokens is True
+    assert m.MammothModa2Qwen3ARForConditionalGeneration.requires_raw_input_tokens is True
+    assert m.MammothModa2ARForConditionalGeneration.supports_omni_decode_step_metadata is True
+    assert m.MammothModa2Qwen3ARForConditionalGeneration.supports_omni_decode_step_metadata is True
+
+
 def test_moe_forward_eager_path_unchanged_when_not_capturing() -> None:
     """Non-capturing path keeps the original all-und / all-gen fast branches."""
     hidden = torch.randn(2, 3, 4)
