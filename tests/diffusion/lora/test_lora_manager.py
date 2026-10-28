@@ -319,18 +319,19 @@ def test_moe_lora_context_is_skipped_without_token_capacity(monkeypatch):
     assert calls == []
 
 
-def test_moe_runners_are_wrapped_at_init_when_capacity_is_set(monkeypatch):
+def _moe_pipeline_with_runner(runner_cls):
+    pipeline = torch.nn.Module()
+    pipeline.transformer = torch.nn.Module()
+    pipeline.transformer.experts = runner_cls()
+    return pipeline
+
+
+def _patch_moe_wrap(monkeypatch, runner_cls):
     import vllm.model_executor.layers.fused_moe as upstream_moe
 
     import vllm_omni.diffusion.lora.manager as manager_mod
 
-    class _TargetMoERunner(torch.nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.moe_config = SimpleNamespace(is_act_and_mul=True, num_experts=2)
-            self.global_num_experts = 2
-
-    monkeypatch.setattr(upstream_moe, "MoERunner", _TargetMoERunner)
+    monkeypatch.setattr(upstream_moe, "MoERunner", runner_cls)
     monkeypatch.setattr(manager_mod, "BaseLayerWithLoRA", _DummyBaseLayerWithLoRA)
     monkeypatch.setattr(
         manager_mod,
@@ -344,9 +345,43 @@ def test_moe_runners_are_wrapped_at_init_when_capacity_is_set(monkeypatch):
     )
     monkeypatch.setattr(manager_mod.DiffusionLoRAManager, "_publish_moe_lora_context", lambda self: None)
 
-    pipeline = torch.nn.Module()
-    pipeline.transformer = torch.nn.Module()
-    pipeline.transformer.experts = _TargetMoERunner()
+
+class _TritonStyleMoERunner(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.moe_config = SimpleNamespace(is_act_and_mul=True, num_experts=2)
+        self.global_num_experts = 2
+
+
+class _TrtLlmStyleMoERunner(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.moe_config = SimpleNamespace(is_act_and_mul=True, num_experts=2)
+        self.global_num_experts = 2
+        self._quant_method = SimpleNamespace(
+            moe_kernel=SimpleNamespace(
+                fused_experts=SimpleNamespace(_batch_has_no_lora=lambda _ctx: True),
+            )
+        )
+
+
+def test_moe_runners_are_not_wrapped_at_init_for_triton_style_experts(monkeypatch):
+    _patch_moe_wrap(monkeypatch, _TritonStyleMoERunner)
+    pipeline = _moe_pipeline_with_runner(_TritonStyleMoERunner)
+    manager = DiffusionLoRAManager(
+        pipeline=pipeline,
+        device=torch.device("cpu"),
+        dtype=torch.bfloat16,
+        max_num_batched_tokens=8,
+    )
+
+    assert "transformer.experts" not in manager._lora_modules
+    assert isinstance(pipeline.transformer.experts, _TritonStyleMoERunner)
+
+
+def test_trtllm_style_moe_runners_are_wrapped_at_init(monkeypatch):
+    _patch_moe_wrap(monkeypatch, _TrtLlmStyleMoERunner)
+    pipeline = _moe_pipeline_with_runner(_TrtLlmStyleMoERunner)
     manager = DiffusionLoRAManager(
         pipeline=pipeline,
         device=torch.device("cpu"),
@@ -358,7 +393,26 @@ def test_moe_runners_are_wrapped_at_init_when_capacity_is_set(monkeypatch):
     assert isinstance(pipeline.transformer.experts, _DummyBaseLayerWithLoRA)
 
 
-def test_publish_moe_lora_context_uses_no_lora_mapping_until_adapter_is_active(monkeypatch):
+def test_activate_adapter_wraps_triton_moe_runners(monkeypatch):
+    _patch_moe_wrap(monkeypatch, _TritonStyleMoERunner)
+    pipeline = _moe_pipeline_with_runner(_TritonStyleMoERunner)
+    manager = DiffusionLoRAManager(
+        pipeline=pipeline,
+        device=torch.device("cpu"),
+        dtype=torch.bfloat16,
+        max_num_batched_tokens=8,
+    )
+    assert "transformer.experts" not in manager._lora_modules
+
+    monkeypatch.setattr(manager, "_bind_adapter_weights", lambda *_args, **_kwargs: None)
+    manager._registered_adapters = {1: type("LM", (), {"id": 1, "loras": {}})()}
+    manager._activate_adapter(1, 1.0)
+
+    assert "transformer.experts" in manager._lora_modules
+    assert isinstance(pipeline.transformer.experts, _DummyBaseLayerWithLoRA)
+
+
+def test_publish_moe_lora_context_clears_triton_context_until_adapter_is_active(monkeypatch):
     import vllm.lora.layers.fused_moe as fused_moe
     import vllm.lora.punica_wrapper as punica_module
 
@@ -369,11 +423,77 @@ def test_publish_moe_lora_context_uses_no_lora_mapping_until_adapter_is_active(m
         def update_metadata(self, mapping, lora_index_to_id, max_loras, vocab_size):
             self.update_calls.append((mapping, lora_index_to_id, max_loras, vocab_size))
 
+    class _FakeExperts:
+        def __init__(self):
+            self.contexts = []
+
+        def set_lora_context(self, ctx):
+            self.contexts.append(ctx)
+
     class _FakeMoELoRA(fused_moe.FusedMoEWithLoRA):
         def __init__(self):
             torch.nn.Module.__init__(self)
             self.mappings = []
             self.base_layer = torch.nn.Module()
+            self._moe_kernel = SimpleNamespace(fused_experts=_FakeExperts(), prepare_finalize=None)
+
+        def set_mapping(self, punica_wrapper):
+            self.mappings.append(punica_wrapper)
+
+        def set_lora(self, index, lora_a, lora_b):
+            raise AssertionError("MoE layer has no adapter weights in this test")
+
+        def reset_lora(self, index):
+            pass
+
+    punica = _FakePunica()
+    monkeypatch.setattr(punica_module, "get_punica_wrapper", lambda *args, **kwargs: punica)
+
+    manager = object.__new__(DiffusionLoRAManager)
+    manager._moe_punica_wrapper = None
+    manager._max_lora_rank = 8
+    manager.max_cached_adapters = 1
+    manager.dtype = torch.bfloat16
+    manager.device = torch.device("cpu")
+    manager._max_num_batched_tokens = 4
+    manager._active_adapter_id = None
+    wrapper = _FakeMoELoRA()
+    manager._lora_modules = {"transformer.experts": wrapper}
+
+    manager._publish_moe_lora_context()
+    assert punica.update_calls == []
+    assert wrapper.mappings == []
+    assert wrapper._moe_kernel.fused_experts.contexts == [None]
+
+    manager._active_adapter_id = 1
+    manager._publish_moe_lora_context()
+    mapping, lora_index_to_id, _, _ = punica.update_calls[-1]
+    assert mapping.index_mapping == (1,) * 4
+    assert lora_index_to_id == [1]
+    assert wrapper.mappings == [punica]
+
+
+def test_publish_moe_lora_context_uses_no_lora_mapping_for_trtllm_until_adapter_is_active(monkeypatch):
+    import vllm.lora.layers.fused_moe as fused_moe
+    import vllm.lora.punica_wrapper as punica_module
+
+    class _FakePunica:
+        def __init__(self):
+            self.update_calls = []
+
+        def update_metadata(self, mapping, lora_index_to_id, max_loras, vocab_size):
+            self.update_calls.append((mapping, lora_index_to_id, max_loras, vocab_size))
+
+    class _FakeTrtExperts:
+        def _batch_has_no_lora(self, _ctx):
+            return True
+
+    class _FakeMoELoRA(fused_moe.FusedMoEWithLoRA):
+        def __init__(self):
+            torch.nn.Module.__init__(self)
+            self.mappings = []
+            self.base_layer = torch.nn.Module()
+            self._moe_kernel = SimpleNamespace(fused_experts=_FakeTrtExperts(), prepare_finalize=None)
 
         def set_mapping(self, punica_wrapper):
             self.mappings.append(punica_wrapper)
@@ -475,10 +595,12 @@ def test_activation_republishes_moe_mapping_after_committing_the_adapter(monkeyp
 
     assert manager._active_adapter_id == 1
     assert len(dense_layer.set_calls) == 1
-    # The binding-time publish still sees no active adapter; the post-commit
-    # publish is what switches the mapping to the adapter slot.
+    # Binding-time publish sees no active adapter and, for Triton-style
+    # wrappers, detaches ``_lora_context`` instead of publishing slot 0.
+    # The post-commit publish is what attaches slot 1 so experts contribute.
     published = [(m.index_mapping, ids) for m, ids, _, _ in punica.update_calls]
-    assert published[0] == ((0,) * 4, [None])
+    assert published
+    assert all(ids == [1] for _, ids in published)
     assert published[-1] == ((1,) * 4, [1])
 
 

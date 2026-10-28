@@ -61,6 +61,28 @@ def _moe_lora_target_names(full_module_name: str, module: nn.Module) -> list[str
     ]
 
 
+def _fused_experts_module(module: nn.Module):
+    """Return the modular fused-experts object for a runner or LoRA wrapper."""
+    moe_kernel = getattr(module, "_moe_kernel", None)
+    if moe_kernel is None:
+        routed = getattr(module, "routed_experts", None)
+        quant_method = getattr(module, "_quant_method", None)
+        if quant_method is None:
+            quant_method = getattr(routed, "quant_method", None)
+        moe_kernel = getattr(quant_method, "moe_kernel", None)
+    return getattr(moe_kernel, "fused_experts", None)
+
+
+def _experts_require_eager_lora_context(experts) -> bool:
+    """True for kernels that assert a LoRA context on every apply().
+
+    TRTLLM LoRA experts (``_batch_has_no_lora``) crash without a context, even
+    on HunyuanImage3 baseline generate(). TritonExperts treat ``_lora_context
+    is None`` as the original unadapted base path.
+    """
+    return callable(getattr(experts, "_batch_has_no_lora", None))
+
+
 class LoRABackend(str, Enum):
     PEFT = "peft"
     DISTILL = "distill"
@@ -183,10 +205,10 @@ class DiffusionLoRAManager:
                 self.set_active_adapter(init_request, 1.0 if self._fixed_adapter else lora_scale)
                 if self._fixed_adapter:
                     self.pin_adapter(init_request.lora_int_id)
-            # MoE kernels are LoRA-capable as soon as vllm_config.lora_config is
-            # set, including HunyuanImage3 baseline generate() before any
-            # adapter is loaded. Wrap runners and publish a no-adapter mapping
-            # so TRTLLM LoRA experts have a context on that first forward.
+            # TRTLLM LoRA experts assert a context on the first forward even
+            # when no adapter is loaded. TritonExperts keep the unadapted base
+            # path while ``_lora_context`` is unset, so they are wrapped later
+            # on adapter activation rather than at init.
             self._ensure_moe_lora_context()
             bind = getattr(pipeline, "_bind_diffusion_lora_manager", None)
             if callable(bind):
@@ -639,18 +661,57 @@ class DiffusionLoRAManager:
                     logger.debug("Replaced layer: %s -> %s", full_module_name, type(lora_layer).__name__)
 
     def _ensure_moe_lora_context(self) -> None:
-        """Wrap MoE runners and publish mapping before the first forward.
+        """Eager-wrap only kernels that need a context on the first forward.
 
         ``configure_diffusion_vllm_config`` sets ``lora_config`` for MoE + PEFT
         even when no adapter is loaded. TRTLLM LoRA experts then require a
         context on every apply(), including HunyuanImage3 baseline generate().
+        TritonExperts do not: attaching ``_lora_context`` at init takes them
+        off the original base path and adds DiT overhead with no adapter.
         """
         if self._max_num_batched_tokens is None:
+            return
+        if not self._any_moe_requires_eager_lora_context():
+            return
+        self._wrap_moe_runners_for_lora()
+        self._publish_moe_lora_context()
+
+    def _wrap_moe_runners_for_lora(self) -> None:
+        """Wrap remaining MoE runners so an adapter can publish a mapping."""
+        if self._max_num_batched_tokens is None:
+            return
+        if not self._has_unwrapped_moe_runners():
             return
         if self._max_lora_rank <= 0:
             self._ensure_max_lora_rank(min(self._VALID_MAX_RANKS))
         self._replace_moe_runners_with_lora()
-        self._publish_moe_lora_context()
+
+    def _has_unwrapped_moe_runners(self) -> bool:
+        from vllm.model_executor.layers.fused_moe import MoERunner
+
+        for _, component in self._iter_lora_components():
+            for module_name, module in component.named_modules(remove_duplicate=False):
+                if isinstance(module, BaseLayerWithLoRA) or "base_layer" in module_name.split("."):
+                    continue
+                if isinstance(module, MoERunner):
+                    return True
+        return False
+
+    def _any_moe_requires_eager_lora_context(self) -> bool:
+        from vllm.lora.layers.fused_moe import FusedMoEWithLoRA
+        from vllm.model_executor.layers.fused_moe import MoERunner
+
+        for _, component in self._iter_lora_components():
+            for _, module in component.named_modules(remove_duplicate=False):
+                if isinstance(module, MoERunner) and _experts_require_eager_lora_context(
+                    _fused_experts_module(module)
+                ):
+                    return True
+        return any(
+            isinstance(layer, FusedMoEWithLoRA)
+            and _experts_require_eager_lora_context(_fused_experts_module(layer))
+            for layer in self._lora_modules.values()
+        )
 
     def _replace_moe_runners_with_lora(self) -> None:
         """Replace every MoE runner so LoRA-capable kernels get a mapping."""
@@ -1148,18 +1209,43 @@ class DiffusionLoRAManager:
         self._moe_punica_wrapper = punica
         return punica
 
+    def _clear_moe_lora_context(self, moe_wrappers) -> None:
+        """Drop ``_lora_context`` so TritonExperts stay on the unadapted path."""
+        for lora_layer in moe_wrappers:
+            moe_kernel = getattr(lora_layer, "_moe_kernel", None)
+            fused_experts = getattr(moe_kernel, "fused_experts", None)
+            set_context = getattr(fused_experts, "set_lora_context", None)
+            if callable(set_context):
+                set_context(None)
+            prepare_finalize = getattr(moe_kernel, "prepare_finalize", None)
+            set_pf_context = getattr(prepare_finalize, "set_lora_context", None)
+            if callable(set_pf_context):
+                set_pf_context(None)
+
     def _publish_moe_lora_context(self) -> None:
         """Publish weight buffers and enablement through each MoE wrapper's mapping.
 
         Republish after buffer reallocation so kernels reference the current tensors.
-        Refresh the punica token mapping so baseline (no adapter) and adapted
-        forwards select the matching TRTLLM path.
+        TritonExperts keep ``_lora_context is None`` until an adapter is active.
+        TRTLLM LoRA experts still get a no-adapter mapping so apply() has a
+        context and takes the ``no_lora_flag`` fast path.
         """
         from vllm.lora.layers.fused_moe import FusedMoEWithLoRA
 
         moe_wrappers = [ll for ll in self._lora_modules.values() if isinstance(ll, FusedMoEWithLoRA)]
         if not moe_wrappers:
             return
+
+        eager_wrappers = [
+            layer for layer in moe_wrappers if _experts_require_eager_lora_context(_fused_experts_module(layer))
+        ]
+        if self._active_adapter_id is None:
+            self._clear_moe_lora_context([layer for layer in moe_wrappers if layer not in eager_wrappers])
+            moe_wrappers = eager_wrappers
+            if not moe_wrappers:
+                logger.debug("Cleared Triton MoE LoRA context; no eager wrappers to publish")
+                return
+
         punica = self._get_moe_punica_wrapper()
         mapping, lora_index_to_id = self._moe_token_lora_mapping()
         punica.update_metadata(mapping, lora_index_to_id, 1, 0)
@@ -1171,6 +1257,10 @@ class DiffusionLoRAManager:
         if self._is_active_at_scale(adapter_id, scale):
             logger.debug("Adapter %d already active at scale %.3f skipping", adapter_id, scale)
             return
+
+        # Triton runners are left unwrapped at init. Wrap before binding so
+        # the post-commit publish can attach slot-1 context.
+        self._wrap_moe_runners_for_lora()
 
         merged_adapters = getattr(self, "_merged_adapters", {})
         if self._suspended_adapter_id == adapter_id and self._adapter_scales.get(
