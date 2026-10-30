@@ -168,6 +168,13 @@ engine modes. The terminology follows the
 | Step execution | `step_execution=true`, `max_num_seqs=1` | One request advances one denoising step per scheduler tick | Paged path rejects it |
 | Step continuous batching | `step_execution=true`, `max_num_seqs>1` | Compatible active step states advance together | Separate feature; paged Hunyuan is not implemented |
 
+Independent-request batching and step execution under `paged_scheduler` are
+proposed in
+[Paged Independent-Request Batching and Step Execution](diffusion_paged_kv_independent_batching.md).
+That page is a review proposal for
+[RFC #9192](https://github.com/vllm-project/vllm-omni/issues/9192).
+It is not implemented. The status column above is still the runtime behavior.
+
 `max_num_seqs` limits public requests. CFG branches are internal rows of one
 request and are controlled by `diffusion_kv_max_rows_per_request`: a request
 without CFG uses one row, while the standard positive/negative CFG request uses
@@ -326,6 +333,9 @@ required.
 
 - Hunyuan `paged_scheduler` is request-level only; request batching and step
   execution are not implemented (see [Execution Modes](#execution-modes)).
+  [Paged independent-request batching](diffusion_paged_kv_independent_batching.md)
+  proposes a contract for step execution and grouped step batches under
+  `paged_scheduler`. That proposal is not current behavior.
 - Only strict Ulysses SP and the current two-branch CFG layout are supported;
   Ring, AllGather-KV, and independent Hunyuan KV contexts are not implemented.
 - Imported AR-to-DiT page transfer and cross-request canonical prefix caching
