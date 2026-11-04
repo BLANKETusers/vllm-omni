@@ -125,6 +125,16 @@ def _collective_worker(rank, rendezvous, backend):
             model._prepare_local_conditioning({"prompt": ""}, sampling)
         model.video_vae.fail = False
         assert model._encode_local_media(media).visual_condition_shapes == ((1, 2, 2), (1, 2, 2))
+
+        def encode_text_fail(ids, kwargs):
+            del ids, kwargs
+            raise RuntimeError("npu_rms_norm: call aclnnRmsNorm failed, error code is 561002")
+
+        model._encode_text_hidden = encode_text_fail
+        # Rank 0 raises inside the text encoder. Both ranks must observe it
+        # before the hidden-state broadcast, or the peer blocks forever.
+        with pytest.raises(RuntimeError, match="561002"):
+            model._prepare_local_conditioning({"prompt": "test"}, sampling)
     finally:
         dist.destroy_process_group()
 

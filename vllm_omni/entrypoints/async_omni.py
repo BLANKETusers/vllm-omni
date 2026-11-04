@@ -385,6 +385,7 @@ class AsyncOmni(AsyncOmniBase, EngineClient):
                         "release_streaming_output", stage_ids=[0], args=(request_id, chunk_index)
                     )
 
+            self.note_diffusion_infrastructure_success()
             logger.debug(f"[AsyncOmni] Request {request_id} completed")
 
         except (asyncio.CancelledError, GeneratorExit):
@@ -397,6 +398,9 @@ class AsyncOmni(AsyncOmniBase, EngineClient):
             raise
         except Exception as e:
             self._record_request_failure_once(request_id, reason="stage_error")
+            # An escaped aclnnRmsNorm 561002 leaves the worker process alive.
+            # Latch it here so the next /health probe is 503, not 200.
+            self.note_diffusion_infrastructure_failure(e)
             await self._abort_internal_requests(request_id, timeout=ABORT_TIMEOUT_S)
             logger.info(f"[AsyncOmni] Request {request_id} failed (input error): {e}")
             raise

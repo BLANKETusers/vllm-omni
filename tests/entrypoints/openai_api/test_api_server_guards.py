@@ -1028,6 +1028,31 @@ def test_health_without_engine_returns_stable_unhealthy_response() -> None:
     }
 
 
+def test_health_engine_dead_includes_reason() -> None:
+    """A wedged diffusion worker must show up as 503 with the engine's reason.
+
+    Process liveness stays green across aclnnRmsNorm 561002. ``check_health``
+    raises ``EngineDeadError`` for that latch, and ``/health`` has to carry
+    the reason through so a gateway can take the worker out of rotation.
+    """
+
+    class _WedgedEngine:
+        async def check_health(self) -> None:
+            raise EngineDeadError(
+                "Diffusion workers are wedged after aclnnRmsNorm error 561002 (ACLNN_ERR_INNER_TILING_ERROR)."
+            )
+
+    app = FastAPI()
+    app.state.engine_client = _WedgedEngine()
+    response = asyncio.run(api_server.health(_request_for(app, path="/health")))
+
+    assert response.status_code == 503
+    body = json.loads(response.body)
+    assert body["status"] == "unhealthy"
+    assert "561002" in body["reason"]
+    assert "aclnnRmsNorm" in body["reason"]
+
+
 def test_models_without_handler_returns_empty_openai_list() -> None:
     """Lock ``/v1/models`` when ``openai_serving_models`` is unset.
 

@@ -2093,6 +2093,10 @@ async def health(raw_request: Request) -> JSONResponse:
 
     Returns 200 OK if the server is healthy, 503 if the engine is dead.
     Mirrors vLLM upstream's /health which catches EngineDeadError -> 503.
+
+    A diffusion worker that keeps raising aclnnRmsNorm 561002 stays up as a
+    process, so liveness alone would stay 200 while ``GET /v1/videos/{id}``
+    returns 500. ``check_health`` also raises after that failure is latched.
     """
     engine_client = getattr(raw_request.app.state, "engine_client", None) or getattr(
         raw_request.app.state, "diffusion_engine", None
@@ -2106,9 +2110,15 @@ async def health(raw_request: Request) -> JSONResponse:
     try:
         await engine_client.check_health()
         return JSONResponse(content={"status": "healthy"})
-    except EngineDeadError:
+    except EngineDeadError as exc:
+        # Keep the status field stable and add the latch/death reason so a
+        # gateway can tell a wedged RMSNorm worker from a missing engine.
+        reason = str(exc).strip()
+        content: dict[str, str] = {"status": "unhealthy"}
+        if reason:
+            content["reason"] = reason if len(reason) <= 500 else reason[:497] + "..."
         return JSONResponse(
-            content={"status": "unhealthy"},
+            content=content,
             status_code=HTTPStatus.SERVICE_UNAVAILABLE.value,
         )
 

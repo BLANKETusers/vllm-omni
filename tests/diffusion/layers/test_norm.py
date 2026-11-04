@@ -361,6 +361,143 @@ def test_rmsnorm_npu_dispatch_falls_back_for_cpu_tensor(with_residual: bool):
         torch.testing.assert_close(actual, expected)
 
 
+_ACLNN_RMS_NORM_561002 = (
+    "npu_rms_norm:../third_party/op-plugin/op-plugin/ops/opapi/RmsNormKernelOpApi.cpp:34 "
+    "NPU function error: call aclnnRmsNorm failed, error code is 561002"
+)
+
+
+def _patch_npu_rms_norm(monkeypatch: pytest.MonkeyPatch, npu_rms_norm, npu_add_rms_norm=None):
+    from vllm_omni.diffusion.layers import norm as norm_mod
+
+    monkeypatch.setitem(
+        sys.modules,
+        "torch_npu",
+        types.SimpleNamespace(npu_rms_norm=npu_rms_norm, npu_add_rms_norm=npu_add_rms_norm),
+    )
+    monkeypatch.setattr(norm_mod, "_is_npu_tensor", lambda tensor: True)
+    monkeypatch.setattr(norm_mod, "_npu_context_usable", lambda: True)
+
+
+def test_rmsnorm_npu_561002_falls_back_to_native_math(monkeypatch: pytest.MonkeyPatch):
+    """A tiling rejection on a legal tensor uses the fp32 reference instead of failing the request."""
+    from vllm_omni.diffusion.layers.norm import RMSNorm
+
+    def npu_rms_norm(x: torch.Tensor, gamma: torch.Tensor, epsilon: float):
+        del gamma, epsilon
+        raise RuntimeError(_ACLNN_RMS_NORM_561002)
+
+    _patch_npu_rms_norm(monkeypatch, npu_rms_norm)
+    norm = RMSNorm(8, eps=1e-6, dtype=torch.bfloat16)
+    x = torch.randn(2, 3, 8, dtype=torch.bfloat16)
+
+    torch.testing.assert_close(norm.forward_npu(x), norm.forward_native(x))
+
+
+def test_rmsnorm_npu_passes_contiguous_activation(monkeypatch: pytest.MonkeyPatch):
+    """Non-standard strides are compacted before aclnnRmsNorm sees them."""
+    from vllm_omni.diffusion.layers.norm import RMSNorm
+
+    seen: dict[str, bool] = {}
+
+    def npu_rms_norm(x: torch.Tensor, gamma: torch.Tensor, epsilon: float):
+        del epsilon
+        seen["x"] = x.is_contiguous()
+        seen["gamma"] = gamma.is_contiguous()
+        return (x,)
+
+    _patch_npu_rms_norm(monkeypatch, npu_rms_norm)
+    norm = RMSNorm(8, dtype=torch.float32)
+    x = torch.randn(4, 2, 8).transpose(0, 1)
+    assert not x.is_contiguous()
+
+    out = norm.forward_npu(x)
+
+    assert seen == {"x": True, "gamma": True}
+    assert out.is_contiguous()
+    assert out.shape == x.shape
+
+
+def test_rmsnorm_npu_skips_aclnn_for_empty_activation(monkeypatch: pytest.MonkeyPatch):
+    """Empty activations are legal RMSNorm math and a known aclnn tiling reject."""
+    from vllm_omni.diffusion.layers.norm import RMSNorm
+
+    def npu_rms_norm(x: torch.Tensor, gamma: torch.Tensor, epsilon: float):
+        del x, gamma, epsilon
+        raise AssertionError("aclnnRmsNorm should not launch on an empty activation")
+
+    _patch_npu_rms_norm(monkeypatch, npu_rms_norm)
+    norm = RMSNorm(8, dtype=torch.float32)
+    x = torch.empty(2, 0, 8)
+
+    torch.testing.assert_close(norm.forward_npu(x), norm.forward_native(x))
+
+
+def test_rmsnorm_npu_refuses_last_dim_mismatch_before_launch(monkeypatch: pytest.MonkeyPatch):
+    """Last-dim/gamma mismatch is a documented 561002 cause and must not reach the op."""
+    from vllm_omni.diffusion.layers.norm import RMSNorm
+    from vllm_omni.errors import NpuRmsNormError
+
+    called = False
+
+    def npu_rms_norm(x: torch.Tensor, gamma: torch.Tensor, epsilon: float):
+        del x, gamma, epsilon
+        nonlocal called
+        called = True
+        return (torch.empty(0),)
+
+    _patch_npu_rms_norm(monkeypatch, npu_rms_norm)
+    norm = RMSNorm(8, dtype=torch.float32)
+    x = torch.randn(2, 3, 4)
+
+    with pytest.raises(NpuRmsNormError, match="561002") as exc_info:
+        norm.forward_npu(x)
+
+    message = str(exc_info.value)
+    assert "shape=(2, 3, 4)" in message
+    assert "gamma.numel()=8" in message or "does not equal gamma.numel()=8" in message
+    assert not called
+
+
+def test_rmsnorm_npu_561002_with_poisoned_context_raises(monkeypatch: pytest.MonkeyPatch):
+    """Do not run the fp32 fallback when synchronize still reports a dead NPU context."""
+    from vllm_omni.diffusion.layers import norm as norm_mod
+    from vllm_omni.diffusion.layers.norm import RMSNorm
+    from vllm_omni.errors import NpuRmsNormError
+
+    def npu_rms_norm(x: torch.Tensor, gamma: torch.Tensor, epsilon: float):
+        del x, gamma, epsilon
+        raise RuntimeError(_ACLNN_RMS_NORM_561002)
+
+    _patch_npu_rms_norm(monkeypatch, npu_rms_norm)
+    monkeypatch.setattr(norm_mod, "_npu_context_usable", lambda: False)
+    norm = RMSNorm(4, dtype=torch.float32)
+    x = torch.randn(1, 2, 4)
+
+    with pytest.raises(NpuRmsNormError, match="unusable") as exc_info:
+        norm.forward_npu(x)
+
+    assert "aclnnRmsNorm" in str(exc_info.value)
+    assert "561002" in str(exc_info.value)
+    assert x.shape == (1, 2, 4)
+
+
+def test_rmsnorm_npu_unrelated_runtime_error_is_not_rewritten(monkeypatch: pytest.MonkeyPatch):
+    from vllm_omni.diffusion.layers.norm import RMSNorm
+
+    def npu_rms_norm(x: torch.Tensor, gamma: torch.Tensor, epsilon: float):
+        del x, gamma, epsilon
+        raise RuntimeError("npu out of memory")
+
+    _patch_npu_rms_norm(monkeypatch, npu_rms_norm)
+    norm = RMSNorm(4, dtype=torch.float32)
+
+    with pytest.raises(RuntimeError, match="out of memory") as exc_info:
+        norm.forward_npu(torch.randn(1, 2, 4))
+
+    assert type(exc_info.value) is RuntimeError
+
+
 # ── RMSNorm residual tests ──
 
 

@@ -29,6 +29,7 @@ from vllm_omni.engine.messages import (
 )
 from vllm_omni.engine.omni_engine_base import OmniEngineBase
 from vllm_omni.entrypoints.client_request_state import ClientRequestState
+from vllm_omni.entrypoints.diffusion_serving_health import DiffusionServingHealth
 from vllm_omni.entrypoints.pd_utils import PDDisaggregationMixin
 from vllm_omni.entrypoints.utils import coerce_param_message_types, get_final_stage_id_for_e2e
 from vllm_omni.errors import raise_client_error_or
@@ -241,6 +242,9 @@ class OmniBase(PDDisaggregationMixin):
         self.async_chunk = bool(getattr(self.engine, "async_chunk", False))
 
         self.request_states: dict[str, ClientRequestState] = {}
+        # Process liveness stays green while an aclnnRmsNorm 561002 window
+        # fails every video job. generate() latches this; check_health reads it.
+        self._diffusion_serving_health = DiffusionServingHealth()
         self.mod_metrics = OmniModalityMetrics(model_name=model, log_stats=log_stats)
 
         self.default_sampling_params_list = self.engine.default_sampling_params_list
@@ -329,15 +333,40 @@ class OmniBase(PDDisaggregationMixin):
         """
         return not self.engine.is_alive()
 
+    def _has_diffusion_stage(self) -> bool:
+        engine = getattr(self, "engine", None)
+        configs = getattr(engine, "stage_configs", None)
+        if not isinstance(configs, (list, tuple)):
+            return False
+        return any(getattr(cfg, "stage_type", None) == "diffusion" for cfg in configs)
+
+    def note_diffusion_infrastructure_failure(self, exc: BaseException) -> None:
+        """Latch health when a diffusion request escapes an aclnnRmsNorm 561002."""
+        if not self._has_diffusion_stage():
+            return
+        tracker = getattr(self, "_diffusion_serving_health", None)
+        if tracker is not None:
+            tracker.note_failure(exc)
+
+    def note_diffusion_infrastructure_success(self) -> None:
+        """Clear the 561002 latch after one diffusion-capable request succeeds."""
+        if not self._has_diffusion_stage():
+            return
+        tracker = getattr(self, "_diffusion_serving_health", None)
+        if tracker is not None:
+            tracker.note_success()
+
     def check_health(self) -> None:
         if not self.engine.is_alive():
             raise EngineDeadError("Orchestrator process is not alive")
         pools = getattr(self.engine, "stage_pools", None)
-        if pools is None:
-            return
-        for pool in pools:
-            if self._stage_has_no_live_replica(pool):
-                raise EngineDeadError(f"Stage-{pool.stage_id} has no live replica")
+        if pools is not None:
+            for pool in pools:
+                if self._stage_has_no_live_replica(pool):
+                    raise EngineDeadError(f"Stage-{pool.stage_id} has no live replica")
+        tracker = getattr(self, "_diffusion_serving_health", None)
+        if tracker is not None:
+            tracker.raise_if_unhealthy()
 
     def resolve_sampling_params_list(
         self,

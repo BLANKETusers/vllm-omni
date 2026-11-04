@@ -2808,9 +2808,20 @@ class MiniMaxH3Pipeline(
             except Exception as exc:
                 error = exc
         _broadcast_rank0_exception(error)
+        # The text-encoder launch is rank-0 (or the encoder TP group). aclnnRmsNorm
+        # 561002 is raised here, before the hidden-state broadcast below. Without
+        # this publication every other USP rank blocks in that broadcast and the
+        # async engine stops making progress while /health still sees live processes.
+        encode_error = None
         if rank < self.text_encoder_tp_size:
-            ids = self._distribute_encode_inputs(ids, vision_kwargs)
-            hidden = self._encode_text_hidden(ids, vision_kwargs)
+            try:
+                ids = self._distribute_encode_inputs(ids, vision_kwargs)
+                hidden = self._encode_text_hidden(ids, vision_kwargs)
+            except Exception as exc:
+                encode_error = exc
+        _broadcast_rank0_exception(encode_error if rank == 0 else None)
+        if encode_error is not None and rank != 0:
+            raise encode_error
         return (
             _broadcast_tensor(hidden, dtype=torch.bfloat16, device=self.device),
             _broadcast_tensor(tags, dtype=torch.long, device=self.device),

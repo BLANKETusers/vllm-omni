@@ -60,6 +60,34 @@ def is_client_error_status(status_code: int | None) -> bool:
     return status_code is not None and 400 <= int(status_code) < 500
 
 
+class NpuRmsNormError(RuntimeError):
+    """aclnnRmsNorm could not be launched or recovered.
+
+    CANN error 561002 is ``ACLNN_ERR_INNER_TILING_ERROR``: the operator's
+    tiling stage rejected the launch. Public op docs use that code for an
+    illegal rank, an empty gamma, or a last-dimension that does not match
+    gamma. The same code is also reported for intermittent tiling faults on
+    tensors that previously succeeded (see vllm-ascend #6243).
+    """
+
+
+def is_aclnn_rms_norm_tiling_failure(exc: BaseException) -> bool:
+    """Whether ``exc`` is an aclnnRmsNorm / npu_rms_norm tiling failure.
+
+    Client errors are ignored so a prompt validation failure cannot latch
+    worker health. The check is string-based because worker boundaries
+    re-raise ``str(exc)`` (broadcast to other USP ranks, ``DiffusionOutput``,
+    then ``EngineGenerateError``) and drop the original type.
+    """
+    if isinstance(exc, OmniClientError):
+        return False
+    text = f"{type(exc).__name__}: {exc}"
+    if "561002" not in text and "ACLNN_ERR_INNER_TILING_ERROR" not in text and "NpuRmsNormError" not in text:
+        return False
+    lowered = text.lower()
+    return "rmsnorm" in lowered or "rms_norm" in lowered or "npurmsnormerror" in lowered
+
+
 def raise_client_error_or(
     message: str,
     *,
