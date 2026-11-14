@@ -35,6 +35,14 @@ class CudaOmniPlatform(OmniPlatform, CudaPlatformBase):
         return "vllm_omni.worker.gpu_generation_worker.GPUGenerationWorker"
 
     @classmethod
+    def init_diffusion_worker_vllm_config(cls, vllm_config: VllmConfig) -> None:
+        # The worker has bound its device and has not created communicators yet.
+        if envs.VLLM_BATCH_INVARIANT:
+            from vllm.model_executor.determinism.batch_invariant import init_batch_invariance
+
+            init_batch_invariance()
+
+    @classmethod
     def get_default_stage_config_path(cls) -> str:
         return "vllm_omni/deploy"
 

@@ -49,6 +49,14 @@ Diffusion attention implementations dispatch external platforms to
 `forward_oot` the same way. Only `SDPAImpl` provides it so far; resolution
 rejects an explicitly selected backend whose implementation does not.
 
+## CUDA diffusion initialization
+
+When `VLLM_BATCH_INVARIANT=1` is requested, the CUDA diffusion worker invokes
+upstream vLLM's batch-invariance initialization after device binding and before
+creating distributed communicators. This initializes reduction policies and
+operator overrides together; kernel selection from the environment flag alone
+is insufficient. With the flag disabled, the CUDA hook remains a no-op.
+
 ## Candidate invariants
 
 ### PLATFORM-INV-001: Capabilities are explicit
