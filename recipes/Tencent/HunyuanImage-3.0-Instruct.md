@@ -139,7 +139,7 @@ the same checkpoint, parallelism, and image settings.
 Start the DiT-only server with one of the following CLI-only configurations.
 These commands use explicit CLI flags for all parallelism and runtime settings.
 
-**TP=4 + FP8**
+##### TP=4 + FP8
 
 ```bash
 vllm serve tencent/HunyuanImage-3.0-Instruct \
@@ -152,7 +152,7 @@ vllm serve tencent/HunyuanImage-3.0-Instruct \
   --enable-diffusion-pipeline-profiler
 ```
 
-**TP=2 + FP8 + SP=2**
+##### TP=2 + FP8 + SP=2
 
 ```bash
 vllm serve tencent/HunyuanImage-3.0-Instruct \
@@ -166,7 +166,7 @@ vllm serve tencent/HunyuanImage-3.0-Instruct \
   --enable-diffusion-pipeline-profiler
 ```
 
-**TP=2 + FP8 + CFG=2**
+##### TP=2 + FP8 + CFG=2
 
 ```bash
 vllm serve tencent/HunyuanImage-3.0-Instruct \
@@ -442,25 +442,8 @@ Denoising steps: 20
 
 #### Accuracy
 
-Run the HunyuanImage-3.0 quantized DiT accuracy check with the BF16, FP8, and
-mixed FP8/NVFP4 checkpoints:
-
-```bash
-CUDA_VISIBLE_DEVICES=2,3 \
-HUNYUAN_IMAGE3_QUANT_DEVICES=0,1 \
-HUNYUAN_IMAGE3_QUANT_TP=2 \
-HUNYUAN_IMAGE3_BF16_MODEL=/path/to/hunyuan-image3-bf16 \
-HUNYUAN_IMAGE3_FP8_MODEL=/path/to/hunyuan-image3-modelopt-fp8 \
-HUNYUAN_IMAGE3_NVFP4_MODEL=/path/to/hunyuan-image3-modelopt-mixed-experts-nvfp4-dense-fp8 \
-PYTHONPATH=/path/to/vllm-omni:/path/to/vllm:${PYTHONPATH:-} \
-python -m pytest -s -v \
-  tests/e2e/accuracy/test_hunyuan_image3.py \
-  -k quantized_dit_matches_bf16_accuracy
-```
-
-The test compares quantized images with the BF16 image using CLIP-based image
-and text scores, plus structural SSIM / PSNR checks. The current structural
-thresholds are `SSIM >= 0.20` and `PSNR >= 10.0`.
+The CI accuracy matrix below replaces the former opt-in BF16 versus
+FP8/NVFP4 comparison tests.
 
 #### Notes
 
@@ -470,3 +453,74 @@ thresholds are `SSIM >= 0.20` and `PSNR >= 10.0`.
 - `--force-cutlass-fp8` keeps the FP8 dense layers on the CUTLASS FP8 path.
 - The benchmark table is an online HTTP concurrency-16 result; do not compare
   it directly with loaded-once request-level benchmarks.
+
+## CI performance and accuracy matrix
+
+The CUDA nightly pipeline includes these four-card workloads:
+
+| Workload | Weights | Parallelism | Dataset / output | Concurrency | Metrics |
+| --- | --- | --- | --- | --- | --- |
+| AR + DiT performance | Distil, FP8 | AR TP=2 (0,1), DiT TP=1/SP=2 (2,3) | custom IT2I | 1,16 | latency, throughput |
+| DiT performance | Distil, FP8 | TP=1/SP=4 (0,1,2,3) | random T2I | 1,4 | latency, throughput |
+| DiT accuracy | Distil, FP8 | TP=4 (0,1,2,3) | IT2I, one output image | 1 | PSNR, SSIM |
+| AR + DiT accuracy | Distil, FP8 | AR TP=2 (0,1), DiT TP=2 (2,3) | IT2I, one output image | 1 | PSNR, SSIM, CoT similarity, image similarity, CoT prefix |
+
+Performance uses `tencent/HunyuanImage-3.0-Instruct-Distil` with
+`--quantization fp8` for both stages. It does not benchmark the original
+Instruct checkpoint with an eight-step schedule. SP uses Ulysses. Both
+performance deploys set `async_chunk: false` (non-duplex).
+
+Performance cases reuse the production `hunyuan_image_3_moe.yaml` and
+`hunyuan_image3_dit.yaml` deployments. Their JSON `stage_overrides` selects
+the four-card topology on CUDA and NPU, uses the shared-memory connector
+for colocated AR+DiT, and limits AR memory utilization to 0.85 to leave
+headroom for IT2I VAE encoding. No performance-only deployment YAML is needed.
+
+The AR+DiT workload extends the existing
+`tests/dfx/perf/tests/test_hunyuan_image3_it2i.json`: it retains the custom
+prompt, input image, `/v1/images/edits` endpoint and `think_recaption` task.
+The DiT-only request format can also be compared with
+`tests/dfx/perf/tests/test_hunyuan_image3_prefix_caching.json`, which uses
+the two-image dataset shared by the prefix-cache accuracy tests. This
+existing local-model performance suite is retained alongside the new matrix;
+it does not supply an accuracy reference image. The previous
+AR+DiT H200 performance baseline describes Instruct with DiT TP=2, so it
+does not calibrate the distilled FP8 TP=1/SP=2 workload.
+
+Run from the repository root on four H100/B200 GPUs with the matching
+vLLM/vLLM-Omni runtime, cached weights and access to the input image URLs:
+
+```bash
+pytest -sv tests/dfx/perf/scripts/run_benchmark.py --test-config-file tests/dfx/perf/tests/test_hunyuan_image3_it2i.json -m "local_model and diffusion and H100 and cards_4" --run-level full_model
+pytest -sv tests/dfx/perf/scripts/run_benchmark.py --test-config-file tests/dfx/perf/tests/test_hunyuan_image3_dit_sp4.json -m "local_model and diffusion and H100 and cards_4" --run-level full_model
+pytest -sv tests/e2e/accuracy/test_hunyuan_image3.py -k test_hunyuan_image3_ar_tp2_dit_tp2_it2i -m "local_model and diffusion and H100 and cards_4" --run-level full_model
+```
+
+Both accuracy workloads use the distilled checkpoint with FP8 quantization
+and eight inference steps, matching performance. AR+DiT accuracy also needs
+`FlagEmbedding` and the embedding/CLIP model caches. `HUNYUAN_MODEL_PATH`
+(AR+DiT) and `HUNYUAN_IMAGE3_MODEL` (DiT-only) may point to local distilled
+checkpoints. AR+DiT retains its existing distilled image/CoT references and
+thresholds; the quantized outputs must still pass those checks.
+
+DiT-only IT2I uses `tests/assets/hunyuan_image3/it2i.jsonl`, both input
+images in their listed order, `bot_task=none`, `sys_type=en_unified`, seed
+42, 8 steps, guidance 2.5, FP8 quantization, and one 1280x720 output. It
+reuses `tests/assets/hunyuan_image3/hunyuan_image_distill_ref.png` and the
+existing distilled thresholds: SSIM >= 0.23 and PSNR >= 12.5 dB. This is a
+quality comparison against the AR+DiT reference, rather than a claim of
+identical conditioning or pixel equivalence between pipelines. No reference
+environment variables are required for the default run:
+
+```bash
+pytest -sv tests/e2e/accuracy/test_hunyuan_image3.py::test_hunyuan_image3_dit_tp4_it2i_online --run-level full_model
+pytest -sv tests/e2e/accuracy/test_hunyuan_image3.py::test_hunyuan_image3_dit_tp4_it2i_online -m "local_model and diffusion and H100 and cards_4" --run-level full_model
+```
+
+The two new performance workloads intentionally have empty `baseline` maps
+until calibration on the target CI hardware. The unified runner records `mean_e2el_ms`,
+`p99_e2el_ms` and `request_throughput`, but empty baselines do not establish a
+performance regression gate. Populate each hardware bucket with measured
+values before treating the matrix as calibrated. Sweep baseline values are
+lists in concurrency order: `[1,16]` for AR+DiT and `[1,4]` for DiT. Do not
+reuse the previous Instruct TP=2/SP=2 or TP=4 benchmark numbers.
