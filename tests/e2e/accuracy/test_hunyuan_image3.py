@@ -89,10 +89,9 @@ def _accuracy_env(monkeypatch):
 # Fixed four-card CI topology: AR TP=2 + DiT TP=2.
 AR_DEVICES, DIT_DEVICES = "0,1", "2,3"
 
-# Match the distilled FP8 performance workload, including local checkpoint overrides.
+# Use the distilled checkpoint without quantization for accuracy comparisons.
 MODEL_NAME = "tencent/HunyuanImage-3.0-Instruct-Distil"
 MODEL_PATH = os.environ.get("HUNYUAN_MODEL_PATH", MODEL_NAME)
-QUANTIZATION = "fp8"
 NUM_INFERENCE_STEPS = 8
 GUIDANCE_SCALE = 2.5
 
@@ -194,7 +193,7 @@ _AR_DIT_DEPLOY = _make_ar_dit_config()
 _AR_DIT_SERVER_PARAMS = OmniServerParams(
     model=MODEL_PATH,
     stage_config_path=_AR_DIT_DEPLOY,
-    server_args=["--trust-remote-code", "--quantization", QUANTIZATION],
+    server_args=["--trust-remote-code", "--dtype", "bfloat16"],
     env_dict={"DIFFUSION_ATTENTION_BACKEND": "TORCH_SDPA"},
     stage_init_timeout=900,
     init_timeout=1800,
@@ -202,7 +201,7 @@ _AR_DIT_SERVER_PARAMS = OmniServerParams(
 _AR_DIT_RUNNER_PARAMS = (
     MODEL_PATH,
     _AR_DIT_DEPLOY,
-    {"trust_remote_code": True, "quantization": QUANTIZATION, "stage_init_timeout": 900, "init_timeout": 1800},
+    {"trust_remote_code": True, "dtype": "bfloat16", "stage_init_timeout": 900, "init_timeout": 1800},
 )
 
 
@@ -215,7 +214,7 @@ DIT_SIMILARITY_THRESHOLDS_BY_DEVICE: dict[str, SimilarityThresholds] = {
 _DIT_SERVER_PARAMS = OmniServerParams(
     model=os.environ.get("HUNYUAN_IMAGE3_MODEL", MODEL_NAME),
     stage_config_path=get_deploy_config_path("hunyuan_image3_dit.yaml"),
-    server_args=["--trust-remote-code", "--quantization", QUANTIZATION, "--dtype", "bfloat16"],
+    server_args=["--trust-remote-code", "--dtype", "bfloat16"],
     env_dict={"DIFFUSION_ATTENTION_BACKEND": "TORCH_SDPA"},
     stage_init_timeout=900,
     init_timeout=1800,
@@ -386,7 +385,7 @@ def _assert_accuracy(
         extra={
             "label": label,
             "reference": str(HUNYUAN_IMAGE_REF_PATH),
-            "quantization": QUANTIZATION,
+            "quantization": "disabled",
             "device_profile": device_profile,
             "metric_profiles": metric_profiles,
         },

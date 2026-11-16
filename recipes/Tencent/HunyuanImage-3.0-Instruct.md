@@ -462,8 +462,8 @@ The CUDA nightly pipeline includes these four-card workloads:
 | --- | --- | --- | --- | --- | --- |
 | AR + DiT performance | Distil, FP8 | AR TP=2 (0,1), DiT TP=1/SP=2 (2,3) | custom IT2I | 1,16 | latency, throughput |
 | DiT performance | Distil, FP8 | TP=1/SP=4 (0,1,2,3) | random T2I | 1,4 | latency, throughput |
-| DiT accuracy | Distil, FP8 | TP=4 (0,1,2,3) | IT2I, one output image | 1 | PSNR, SSIM |
-| AR + DiT accuracy | Distil, FP8 | AR TP=2 (0,1), DiT TP=2 (2,3) | IT2I, one output image | 1 | PSNR, SSIM, CoT similarity, image similarity, CoT prefix |
+| DiT accuracy | Distil, BF16 | TP=4 (0,1,2,3) | IT2I, one output image | 1 | PSNR, SSIM |
+| AR + DiT accuracy | Distil, BF16 | AR TP=2 (0,1), DiT TP=2 (2,3) | IT2I, one output image | 1 | PSNR, SSIM, CoT similarity, image similarity, CoT prefix |
 
 Performance uses `tencent/HunyuanImage-3.0-Instruct-Distil` with
 `--quantization fp8` for both stages. It does not benchmark the original
@@ -496,16 +496,16 @@ pytest -sv tests/dfx/perf/scripts/run_benchmark.py --test-config-file tests/dfx/
 pytest -sv tests/e2e/accuracy/test_hunyuan_image3.py -k test_hunyuan_image3_ar_tp2_dit_tp2_it2i -m "full_model and diffusion and H100 and cards_4" --run-level full_model
 ```
 
-Both accuracy workloads use the distilled checkpoint with FP8 quantization
-and eight inference steps, matching performance. AR+DiT accuracy also needs
+Both accuracy workloads use the distilled checkpoint in BF16 without
+quantization and with eight inference steps. Performance workloads retain FP8. AR+DiT accuracy also needs
 `FlagEmbedding` and the embedding/CLIP model caches. `HUNYUAN_MODEL_PATH`
 (AR+DiT) and `HUNYUAN_IMAGE3_MODEL` (DiT-only) may point to local distilled
 checkpoints. AR+DiT retains its existing distilled image/CoT references and
-thresholds; the quantized outputs must still pass those checks.
+thresholds; the BF16 outputs must still pass those checks.
 
 DiT-only IT2I uses `tests/assets/hunyuan_image3/it2i.jsonl`, both input
 images in their listed order, `bot_task=none`, `sys_type=en_unified`, seed
-42, 8 steps, guidance 2.5, FP8 quantization, and one 1280x720 output. It
+42, 8 steps, guidance 2.5, BF16 without quantization, and one 1280x720 output. It
 reuses `tests/assets/hunyuan_image3/hunyuan_image_distill_ref.png` and the
 existing distilled thresholds: SSIM >= 0.23 and PSNR >= 12.5 dB. This is a
 quality comparison against the AR+DiT reference, rather than a claim of
