@@ -323,7 +323,7 @@ for those modules. Support for `modelopt_fp4` does not remove this limitation.
    `VLLM_OMNI_QUALITY_CONFIGS` to validate local baseline and quantized model
    paths.
 3. HunyuanImage-3.0 CI now uses the performance and accuracy matrix in the
-   [HunyuanImage recipe](../../../recipes/Tencent/HunyuanImage-3.0-Instruct.md#ci-performance-and-accuracy-matrix).
+   [HunyuanImage recipe](https://github.com/vllm-project/vllm-omni/blob/main/recipes/Tencent/HunyuanImage-3.0-Instruct.md#ci-performance-and-accuracy-matrix).
    The former model-specific opt-in BF16 versus FP8/NVFP4 accuracy tests
    have been removed. Use the generic quantization quality check above
    for additional local checkpoint comparisons.

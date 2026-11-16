@@ -268,7 +268,7 @@ steps:
         artifact_paths:
           - tests/e2e/accuracy/results/result_acc_*.json
         commands:
-          - pytest -sv tests/e2e/accuracy/test_hunyuan_image3.py -m "full_model and diffusion and H100 and B200 and cards_4" --run-level full_model
+          - pytest -sv tests/e2e/accuracy/test_hunyuan_image3.py tests/e2e/accuracy/test_hunyuan_image3_lora.py -m "full_model and diffusion and H100 and B200 and cards_4" --run-level full_model
 
       - label: ":full_moon: HunyuanImage3 Distil FP8 Performance Test"
         source_file_dependencies: diffusion_hunyuan_image3_perf

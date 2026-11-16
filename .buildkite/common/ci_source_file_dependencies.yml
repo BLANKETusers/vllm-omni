@@ -1474,7 +1474,6 @@ source_file_dependencies:
 
   diffusion_hunyuan_image3_accuracy:
     - *hunyuan_image3
-    - tests/e2e/accuracy/test_hunyuan_image3_pixel_accuracy.py
     - tests/e2e/accuracy/test_hunyuan_image3.py
     - tests/assets/hunyuan_image3/
     - tests/e2e/accuracy/test_hunyuan_image3_lora.py
