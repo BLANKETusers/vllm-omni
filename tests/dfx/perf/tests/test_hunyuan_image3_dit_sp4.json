@@ -15,7 +15,7 @@
         }
       },
       "diffusion",
-      "local_model"
+      "full_model"
     ],
     "description": "FP8 distilled weights; DiT TP=1 SP=4 on GPUs 0,1,2,3; random dataset; concurrency 1,4",
     "server_params": {

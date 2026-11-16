@@ -256,7 +256,7 @@ steps:
           - tests/dfx/perf/results/*.json
           - tests/dfx/perf/results/logs/*.log
         commands:
-          - pytest -sv tests/dfx/perf/scripts/run_benchmark.py --test-config-file tests/dfx/perf/tests/test_hunyuan_image3_it2i.json -m "local_model and diffusion and npu and A3 and cards_4" --run-level full_model
+          - pytest -sv tests/dfx/perf/scripts/run_benchmark.py --test-config-file tests/dfx/perf/tests/test_hunyuan_image3_it2i.json -m "full_model and diffusion and npu and A3 and cards_4" --run-level full_model
 
       - label: ":full_moon: HunyuanImage3 DiT SP4 Performance (4 NPU)"
         key: nightly-hunyuan-image3-dit-sp4-perf-npu
@@ -272,7 +272,7 @@ steps:
           - tests/dfx/perf/results/*.json
           - tests/dfx/perf/results/logs/*.log
         commands:
-          - pytest -sv tests/dfx/perf/scripts/run_benchmark.py --test-config-file tests/dfx/perf/tests/test_hunyuan_image3_dit_sp4.json -m "local_model and diffusion and npu and A3 and cards_4" --run-level full_model
+          - pytest -sv tests/dfx/perf/scripts/run_benchmark.py --test-config-file tests/dfx/perf/tests/test_hunyuan_image3_dit_sp4.json -m "full_model and diffusion and npu and A3 and cards_4" --run-level full_model
 
       - label: ":full_moon: HunyuanImage3 AR TP2 + DiT TP2 Accuracy (4 NPU)"
         key: nightly-hunyuan-image3-ar-tp2-dit-tp2-accuracy-npu
@@ -286,7 +286,7 @@ steps:
         artifact_paths:
           - tests/e2e/accuracy/results/result_acc_*.json
         commands:
-          - pytest -sv tests/e2e/accuracy/test_hunyuan_image3.py -k test_hunyuan_image3_ar_tp2_dit_tp2_it2i -m "local_model and diffusion and npu and A3 and cards_4" --run-level full_model
+          - pytest -sv tests/e2e/accuracy/test_hunyuan_image3.py -k test_hunyuan_image3_ar_tp2_dit_tp2_it2i -m "full_model and diffusion and npu and A3 and cards_4" --run-level full_model
 
       - label: ":full_moon: HunyuanImage3 DiT TP4 IT2I Accuracy (4 NPU)"
         key: nightly-hunyuan-image3-dit-tp4-it2i-accuracy-npu
@@ -300,7 +300,7 @@ steps:
         artifact_paths:
           - tests/e2e/accuracy/results/result_acc_*.json
         commands:
-          - pytest -sv tests/e2e/accuracy/test_hunyuan_image3.py::test_hunyuan_image3_dit_tp4_it2i_online -m "local_model and diffusion and npu and A3 and cards_4" --run-level full_model
+          - pytest -sv tests/e2e/accuracy/test_hunyuan_image3.py::test_hunyuan_image3_dit_tp4_it2i_online -m "full_model and diffusion and npu and A3 and cards_4" --run-level full_model
 
       - label: ":full_moon: Diffusion X2I(&A&T) · Perf Test · Qwen-Image-2.1 · Single-NPU"
         source_file_dependencies: diffusion_qwen_image_21_perf

@@ -74,7 +74,7 @@ def _assert_cot_structural_markers(cot_text: str, label: str) -> None:
     )
 
 
-pytestmark = [pytest.mark.local_model, pytest.mark.diffusion]
+pytestmark = [pytest.mark.full_model, pytest.mark.diffusion]
 
 
 @pytest.fixture(autouse=True)

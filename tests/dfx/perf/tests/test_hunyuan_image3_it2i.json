@@ -15,7 +15,7 @@
         }
       },
       "diffusion",
-      "local_model"
+      "full_model"
     ],
     "description": "FP8 distilled weights; non-duplex AR TP=2 on GPUs 0,1 + DiT TP=1 SP=2 on GPUs 2,3; custom dataset; concurrency 1,16",
     "server_params": {

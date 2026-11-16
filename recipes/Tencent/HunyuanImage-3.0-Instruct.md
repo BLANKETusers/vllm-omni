@@ -491,9 +491,9 @@ Run from the repository root on four H100/B200 GPUs with the matching
 vLLM/vLLM-Omni runtime, cached weights and access to the input image URLs:
 
 ```bash
-pytest -sv tests/dfx/perf/scripts/run_benchmark.py --test-config-file tests/dfx/perf/tests/test_hunyuan_image3_it2i.json -m "local_model and diffusion and H100 and cards_4" --run-level full_model
-pytest -sv tests/dfx/perf/scripts/run_benchmark.py --test-config-file tests/dfx/perf/tests/test_hunyuan_image3_dit_sp4.json -m "local_model and diffusion and H100 and cards_4" --run-level full_model
-pytest -sv tests/e2e/accuracy/test_hunyuan_image3.py -k test_hunyuan_image3_ar_tp2_dit_tp2_it2i -m "local_model and diffusion and H100 and cards_4" --run-level full_model
+pytest -sv tests/dfx/perf/scripts/run_benchmark.py --test-config-file tests/dfx/perf/tests/test_hunyuan_image3_it2i.json -m "full_model and diffusion and H100 and cards_4" --run-level full_model
+pytest -sv tests/dfx/perf/scripts/run_benchmark.py --test-config-file tests/dfx/perf/tests/test_hunyuan_image3_dit_sp4.json -m "full_model and diffusion and H100 and cards_4" --run-level full_model
+pytest -sv tests/e2e/accuracy/test_hunyuan_image3.py -k test_hunyuan_image3_ar_tp2_dit_tp2_it2i -m "full_model and diffusion and H100 and cards_4" --run-level full_model
 ```
 
 Both accuracy workloads use the distilled checkpoint with FP8 quantization
@@ -514,7 +514,7 @@ environment variables are required for the default run:
 
 ```bash
 pytest -sv tests/e2e/accuracy/test_hunyuan_image3.py::test_hunyuan_image3_dit_tp4_it2i_online --run-level full_model
-pytest -sv tests/e2e/accuracy/test_hunyuan_image3.py::test_hunyuan_image3_dit_tp4_it2i_online -m "local_model and diffusion and H100 and cards_4" --run-level full_model
+pytest -sv tests/e2e/accuracy/test_hunyuan_image3.py::test_hunyuan_image3_dit_tp4_it2i_online -m "full_model and diffusion and H100 and cards_4" --run-level full_model
 ```
 
 The two new performance workloads intentionally have empty `baseline` maps
